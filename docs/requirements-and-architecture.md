@@ -23,7 +23,7 @@
 ## 2.1 技术要求
 
 - 最低系统版本：iOS 13.0。
-- 最低 Swift tools version：Swift 6.3。
+- 最低 Swift tools version：Swift 6.2。
 - Swift 语言模式：Swift 6。
 - UIKit 相关 API 必须满足 Swift 6 strict concurrency 下的安全并发要求。
 - 所有触碰 UIKit 的 view controller、view、data source 回调、delegate 回调、滚动协调、刷新协调和布局失效逻辑都必须隔离到主 actor。
