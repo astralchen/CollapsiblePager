@@ -1,113 +1,172 @@
-# CollapsiblePager V1 Implementation Plan
+# CollapsiblePager V1 Rewrite Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 交付第一版通用 UIKit `CollapsiblePager`：可折叠 Header、默认 TabBar、横向分页、滚动协调、刷新仲裁和示例 App 验收链路。
+**Goal:** 从干净占位模块重写 V1 通用 UIKit `CollapsiblePager`，交付可折叠 Header、默认 TabBar、横向分页、纵向嵌套滚动、刷新 handoff 和示例验收链路。
 
-**Architecture:** 公开容器 `CollapsiblePagerViewController` 只编排 data source、delegate、child containment 和内部协调器。纵向状态以 `pinAnchorY` 和 layout engine 输出为唯一锚点，Header/TabBar 视觉宿主在 child mount 与 fixed overlay 之间迁移，Tab 点击、API 选择和横向拖拽统一进入 page request pipeline。
+**Architecture:** V1 采用“Nested 纵向内核 + Tabman 横向状态链路”的组合设计。纵向状态以 `PinAnchor` 为真相，横向状态以 `PagePosition` 为真相，TabBar 只渲染和发请求，刷新只做外部 handoff。
 
-**Tech Stack:** Swift 6.2 package、UIKit、Swift Testing、XCTest UI Tests、iOS 13。
+**Tech Stack:** Swift 6.2、UIKit、Swift Testing、XCTest UI Tests、iOS 13、内部 `UIScrollView` paging 容器。
 
 ---
 
-## Scope Decisions
+## 当前基线
 
-- 第一版按 `docs/requirements-and-architecture.md` 第 12 节和 `docs/ui-design-and-animation-dsl.md` 第 11 节的保守范围执行：`belowHeader`、导航栏/安全区吸顶、默认等宽文本 TabBar、默认短下划线指示器、`fixed`/`automatic` Header 高度、`.none`/`.overall`/`.child` 刷新、`reloadHeaderLayout(.immediate, .preserveVisualPosition)`。
-- `overlayHeaderBottom(offset:)` 在需求第 5.3 节被描述为“第一版可以优先实现”，但在第一版交付范围中被列到第二阶段。本计划将其作为第二阶段任务，先保证默认路径稳定。
-- 第一版不实现可横向滚动 TabBar、自定义指示器公开实现、自定义 Header 高度 provider、自定义 TabBar layout provider、Header 下拉拉伸和 Header 布局刷新动画。
-- 按仓库 AGENTS 约定，执行计划时只有用户明确要求才 `git add` / `git commit` / `git push`。任务中的提交点只作为拆分建议。
+旧源码骨架已经删除。当前核心 target 只保留：
 
-## File Structure
+- `Sources/CollapsiblePager/CollapsiblePager.swift`
+- `Tests/CollapsiblePagerTests/CollapsiblePagerTests.swift`
 
-### Core Library
+执行本计划时，从这个干净基线开始实现。不要恢复旧的 `Public/`、`Header/`、`Layout/` 代码；需要按本计划重新创建。
 
-- Create: `Sources/CollapsiblePager/Public/CollapsiblePagerViewController.swift`
-  公开容器，承接 `reloadData()`、`selectPage(at:animated:)`、`reloadHeaderLayout(...)`、`endRefreshing()`。
-- Create: `Sources/CollapsiblePager/Public/CollapsiblePagerDataSource.swift`
-  `CollapsiblePagerHeaderContent`、`CollapsiblePagerDataSource`。
-- Create: `Sources/CollapsiblePager/Public/CollapsiblePagerDelegate.swift`
-  `CollapsiblePagerDelegate` 和默认空实现。
-- Create: `Sources/CollapsiblePager/Public/CollapsiblePagerConfiguration.swift`
-  Header、TabBar、Indicator、Paging、Refresh 配置和值类型默认值。
-- Create: `Sources/CollapsiblePager/Public/CollapsiblePagerProtocols.swift`
-  `CollapsiblePagerScrollProviding`、`CollapsiblePagerRefreshableChild`、保留扩展协议。
-- Create: `Sources/CollapsiblePager/Public/CollapsiblePagerLayoutContext.swift`
-  公开 layout context，供 delegate 和 provider 使用。
-- Create: `Sources/CollapsiblePager/Layout/CollapsiblePagerLayoutEngine.swift`
-  纯计算布局引擎。
-- Create: `Sources/CollapsiblePager/Layout/CollapsiblePagerLayoutModels.swift`
-  布局输入、输出、offset policy、clamp helpers。
-- Create: `Sources/CollapsiblePager/Header/CollapsiblePagerHeaderHostView.swift`
-  Header view/controller 包装、Auto Layout 测量、collapse progress 分发。
-- Create: `Sources/CollapsiblePager/Header/CollapsiblePagerHeaderMountView.swift`
-  每个 child scroll view 顶部 inset 区域的挂载点。
-- Create: `Sources/CollapsiblePager/Header/CollapsiblePagerFixedHeaderContainer.swift`
-  吸顶、横向切页、刷新 reveal、布局刷新期间的 fixed overlay。
-- Create: `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabBar.swift`
-  默认等宽文本 TabBar、accessibility selected 状态、点击转发。
-- Create: `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabIndicator.swift`
-  默认下划线指示器和 focus rect 计算。
-- Create: `Sources/CollapsiblePager/Paging/CollapsiblePagerPageContainer.swift`
-  内部 paging `UIScrollView`、child containment、page request pipeline。
-- Create: `Sources/CollapsiblePager/Paging/CollapsiblePagerPagePosition.swift`
+## 验证命令
+
+文档或计划改动：
+
+```sh
+git diff --check
+```
+
+核心库测试：
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17' test
+```
+
+如果本机没有 `iPhone 17` 模拟器，先运行：
+
+```sh
+xcrun simctl list devices available
+```
+
+然后替换为可用模拟器名称。
+
+## 文件结构
+
+### Public
+
+- `Sources/CollapsiblePager/Public/CollapsiblePagerViewController.swift`
+  公开容器 façade，不承载复杂滚动算法。
+- `Sources/CollapsiblePager/Public/CollapsiblePagerViewControllerDataSource.swift`
+  Header、page count、title、child controller data source。
+- `Sources/CollapsiblePager/Public/CollapsiblePagerViewControllerDelegate.swift`
+  已提交选择、折叠进度和布局 context 回调。
+- `Sources/CollapsiblePager/Public/CollapsiblePagerConfiguration.swift`
+  Header、TabBar、indicator、paging、refresh 和 gesture 配置。
+- `Sources/CollapsiblePager/Public/CollapsiblePagerProtocols.swift`
+  `CollapsiblePagerScrollProviding`。
+- `Sources/CollapsiblePager/Public/CollapsiblePagerLayoutContext.swift`
+  对外可观察的布局上下文。
+
+### Core State
+
+- `Sources/CollapsiblePager/State/CollapsiblePagerState.swift`
+  selection、page count、Header、pin、refresh handoff 总状态。
+- `Sources/CollapsiblePager/State/CollapsiblePagerPagePosition.swift`
   `PagePosition`、direction、raw offset 转换。
-- Create: `Sources/CollapsiblePager/Scroll/CollapsiblePagerPinAnchor.swift`
-  `pinAnchorY` 状态和值语义更新。
-- Create: `Sources/CollapsiblePager/Scroll/CollapsiblePagerScrollCoordinator.swift`
-  纵向滚动状态机、guarded offset update、非当前 child offset 修正。
-- Create: `Sources/CollapsiblePager/Refresh/CollapsiblePagerRefreshCoordinator.swift`
-  刷新资格判断、唯一 owner、结束刷新。
-- Create: `Sources/CollapsiblePager/Gesture/CollapsiblePagerGestureArbiter.swift`
-  横向分页、纵向滚动和导航返回手势优先级。
-- Replace: `Sources/CollapsiblePager/CollapsiblePager.swift`
-  改成模块导出占位或移除骨架注释。
+- `Sources/CollapsiblePager/State/CollapsiblePagerPinAnchor.swift`
+  纵向 anchor 值语义和 delta 计算。
+
+### Layout
+
+- `Sources/CollapsiblePager/Layout/CollapsiblePagerLayoutModels.swift`
+  layout input/output、edge insets、Header heights、offset transition。
+- `Sources/CollapsiblePager/Layout/CollapsiblePagerLayoutEngine.swift`
+  纯值布局计算。
+
+### Header
+
+- `Sources/CollapsiblePager/Header/CollapsiblePagerHeaderHostView.swift`
+  Header view 承载、Auto Layout 测量、collapse progress 分发。
+- `Sources/CollapsiblePager/Header/CollapsiblePagerHeaderHostCoordinator.swift`
+  Header content lifecycle、controller containment、host 迁移。
+- `Sources/CollapsiblePager/Header/CollapsiblePagerHeaderMountView.swift`
+  child scroll view 顶部 inset 区域的挂载点。
+- `Sources/CollapsiblePager/Header/CollapsiblePagerFixedHeaderContainer.swift`
+  吸顶、横向切页、回弹、刷新 reveal/end 和布局刷新使用的 fixed overlay。
+
+### Children
+
+- `Sources/CollapsiblePager/Children/CollapsiblePagerChildStore.swift`
+  child 缓存、containment、scroll provider 校验和 managed inset 应用。
+- `Sources/CollapsiblePager/Children/CollapsiblePagerChildRecord.swift`
+  单个 child 的 view controller、scroll view、mount view 和观察 token。
+
+### Paging
+
+- `Sources/CollapsiblePager/Paging/CollapsiblePagerPageContainer.swift`
+  内部 paging `UIScrollView` 和 child view 横向布局。
+- `Sources/CollapsiblePager/Paging/CollapsiblePagerPageRequestPipeline.swift`
+  Tab/API/gesture page request 的校验、pending、commit 和 cancel。
+
+### TabBar
+
+- `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabBarView.swift`
+  默认等宽文本 TabBar。
+- `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabItemView.swift`
+  Tab button、selected progress 和 accessibility。
+- `Sources/CollapsiblePager/TabBar/CollapsiblePagerIndicatorFocusRect.swift`
+  focus rect 与 indicator frame 计算。
+- `Sources/CollapsiblePager/TabBar/CollapsiblePagerUnderlineIndicatorView.swift`
+  默认短下划线。
+
+### Scroll, Refresh, Gesture
+
+- `Sources/CollapsiblePager/Scroll/CollapsiblePagerVerticalScrollCoordinator.swift`
+  纵向嵌套滚动、pin anchor、guarded offset、非当前 child 同步。
+- `Sources/CollapsiblePager/Refresh/CollapsiblePagerRefreshHandoffCoordinator.swift`
+  刷新资格、同手势互斥和 handoff 记录。
+- `Sources/CollapsiblePager/Gesture/CollapsiblePagerGestureArbiter.swift`
+  横向/纵向/系统返回手势优先级。
 
 ### Tests
 
-- Create: `Tests/CollapsiblePagerTests/LayoutEngineTests.swift`
-- Create: `Tests/CollapsiblePagerTests/HeaderHeightTests.swift`
-- Create: `Tests/CollapsiblePagerTests/TabIndicatorTests.swift`
-- Create: `Tests/CollapsiblePagerTests/PagePositionTests.swift`
-- Create: `Tests/CollapsiblePagerTests/RefreshCoordinatorTests.swift`
-- Create: `Tests/CollapsiblePagerTests/ScrollCoordinatorTests.swift`
-- Create: `Tests/CollapsiblePagerTests/ContainerLifecycleTests.swift`
-- Replace: `Tests/CollapsiblePagerTests/CollapsiblePagerTests.swift`
-  移除模板测试或改为 smoke test。
+- `Tests/CollapsiblePagerTests/PublicAPIContractTests.swift`
+- `Tests/CollapsiblePagerTests/LayoutEngineTests.swift`
+- `Tests/CollapsiblePagerTests/PagePositionTests.swift`
+- `Tests/CollapsiblePagerTests/PageRequestPipelineTests.swift`
+- `Tests/CollapsiblePagerTests/IndicatorFocusRectTests.swift`
+- `Tests/CollapsiblePagerTests/RefreshHandoffTests.swift`
+- `Tests/CollapsiblePagerTests/PinAnchorTests.swift`
+- `Tests/CollapsiblePagerTests/HeaderContainmentTests.swift`
+- `Tests/CollapsiblePagerTests/ChildStoreTests.swift`
+- `Tests/CollapsiblePagerTests/VerticalScrollCoordinatorTests.swift`
 
-### Example App And UI Tests
-
-- Modify: `Examples/Examples.xcodeproj/project.pbxproj`
-  将 local package product `CollapsiblePager` 连接到 Examples target。
-- Modify: `Examples/Examples/ViewController.swift`
-  加载 demo pager，支持 launch arguments 切换场景。
-- Create: `Examples/Examples/DemoPagerFactory.swift`
-- Create: `Examples/Examples/DemoHeaderView.swift`
-- Create: `Examples/Examples/DemoListViewController.swift`
-- Create: `Examples/Examples/DemoAccessibility.swift`
-- Replace: `Examples/ExamplesUITests/ExamplesUITests.swift`
-  加入必要 UI 测试。
-
-## Task 1: Public API And Defaults
+## Task 1: 公开 API 合约
 
 **Files:**
+
 - Create: `Sources/CollapsiblePager/Public/CollapsiblePagerConfiguration.swift`
-- Create: `Sources/CollapsiblePager/Public/CollapsiblePagerDataSource.swift`
-- Create: `Sources/CollapsiblePager/Public/CollapsiblePagerDelegate.swift`
+- Create: `Sources/CollapsiblePager/Public/CollapsiblePagerViewControllerDataSource.swift`
+- Create: `Sources/CollapsiblePager/Public/CollapsiblePagerViewControllerDelegate.swift`
 - Create: `Sources/CollapsiblePager/Public/CollapsiblePagerProtocols.swift`
 - Create: `Sources/CollapsiblePager/Public/CollapsiblePagerLayoutContext.swift`
-- Create: `Tests/CollapsiblePagerTests/PublicAPITests.swift`
+- Create: `Sources/CollapsiblePager/Public/CollapsiblePagerViewController.swift`
+- Test: `Tests/CollapsiblePagerTests/PublicAPIContractTests.swift`
 
-**Acceptance Criteria:**
-- 所有 UIKit 入口、data source、delegate、协议和公开容器 API 标注 `@MainActor`。
-- 默认配置匹配文档推荐值：Header `fixed(max: 260, min: 0)`、TabBar `48`、`.belowHeader`、`.pinBelowNavigationBar(offset: 0)`、指示器 fixed `28`、分页动画 `0.28`、刷新 `.none`。
-- 第一版公开 API 不包含 `animated` header reload behavior、横向滚动 TabBar、自定义 Header 高度 provider 的实现路径。
+**Acceptance:**
 
-- [ ] **Step 1: Write failing default configuration tests**
+- 所有 UIKit 入口为 `@MainActor`。
+- `selectedIndex` 默认等于 `0`。
+- 没有页面时 `effectiveSelectedIndex == nil`。
+- 不存在专门的刷新 child 协议。
+- 不存在刷新触发 delegate。
+- 不要求 `UIRefreshControl`。
+
+- [ ] **Step 1: 写公开 API 失败测试**
 
 ```swift
 import Testing
 import UIKit
 @testable import CollapsiblePager
+
+@MainActor
+@Test func pagerStartsWithPublicSelectedIndexZeroAndNoEffectiveSelection() {
+    let pager = CollapsiblePagerViewController()
+
+    #expect(pager.selectedIndex == 0)
+    #expect(pager.effectiveSelectedIndex == nil)
+}
 
 @MainActor
 @Test func defaultConfigurationMatchesV1Defaults() {
@@ -117,7 +176,7 @@ import UIKit
         #expect(max == 260)
         #expect(min == 0)
     } else {
-        Issue.record("Default header height mode must be fixed.")
+        Issue.record("Default Header height mode should be fixed.")
     }
 
     #expect(configuration.tabBar.height == 48)
@@ -126,41 +185,64 @@ import UIKit
     #expect(configuration.refreshMode == .none)
     #expect(configuration.paging.allowsSwipeToChangePage)
     #expect(configuration.paging.bouncesHorizontally == false)
-    #expect(configuration.paging.tabTapAnimationDuration == 0.28)
+}
+
+@MainActor
+@Test func childOnlyProvidesScrollViewForCoordination() {
+    final class Child: UIViewController, CollapsiblePagerScrollProviding {
+        let scrollView = UIScrollView()
+        var pagerScrollView: UIScrollView { scrollView }
+    }
+
+    let child = Child()
+    let provider: any CollapsiblePagerScrollProviding = child
+
+    #expect(provider.pagerScrollView === child.scrollView)
 }
 ```
 
-- [ ] **Step 2: Add public types and DocC comments**
+- [ ] **Step 2: 创建公开类型**
 
-Implement the public symbols from docs section 7 and 8 with concise Chinese DocC comments. Keep configuration as value types, and mark closures that touch UIKit as `@MainActor`.
+实现配置、data source、delegate 和 scroll provider。`CollapsiblePagerConfiguration` 使用 `@MainActor`，纯值子配置按需要 `Sendable`。
 
-- [ ] **Step 3: Run package tests**
+- [ ] **Step 3: 实现容器最小 selection 空态**
 
-Run: `swift test`
+`reloadData()` 只做 page count clamp 和 effective selection 更新。`selectPage(at:animated:)` 在 Task 5 前先保持 no-op 或立即更新 effective selection 的测试辅助路径，Task 5 会替换为 request pipeline。
 
-Expected: default configuration test passes and no Swift 6 concurrency warning is introduced.
+- [ ] **Step 4: 运行测试**
 
-## Task 2: Layout Engine
+Run:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17' test
+```
+
+Expected: Public API 测试通过。
+
+## Task 2: 纯值 LayoutEngine
 
 **Files:**
+
 - Create: `Sources/CollapsiblePager/Layout/CollapsiblePagerLayoutModels.swift`
 - Create: `Sources/CollapsiblePager/Layout/CollapsiblePagerLayoutEngine.swift`
-- Create: `Tests/CollapsiblePagerTests/LayoutEngineTests.swift`
+- Test: `Tests/CollapsiblePagerTests/LayoutEngineTests.swift`
 
-**Acceptance Criteria:**
-- Layout engine is pure value calculation and does not store UIKit objects.
-- It clamps invalid Header heights so `maxHeight >= minHeight >= 0`.
-- It outputs Header frame, visible height, collapse progress, TabBar frame, pin Y, pin threshold, page container frame, child content inset and offset correction.
-- Safe area and navigation bar pinning share the same path as rotation and Dynamic Type invalidation.
+**Acceptance:**
 
-- [ ] **Step 1: Write failing layout tests**
+- Layout engine 不持有 UIKit 对象。
+- PageContainer frame 等于 pager bounds。
+- child top inset 等于 Header max height + TabBar height。
+- pin threshold 等于 Header collapse range。
+- 空 Header range 时 progress 稳定为 `1`。
+
+- [ ] **Step 1: 写布局失败测试**
 
 ```swift
 import CoreGraphics
 import Testing
 @testable import CollapsiblePager
 
-@Test func belowHeaderExpandedLayoutMatchesDefaultDSL() {
+@Test func expandedLayoutUsesManagedTopInset() {
     let input = CollapsiblePagerLayoutInput(
         containerBounds: CGRect(x: 0, y: 0, width: 390, height: 844),
         safeAreaInsets: .init(top: 47, left: 0, bottom: 34, right: 0),
@@ -174,56 +256,128 @@ import Testing
 
     let output = CollapsiblePagerLayoutEngine().layout(input)
 
+    #expect(output.pageContainerFrame == input.containerBounds)
     #expect(output.headerVisibleHeight == 260)
     #expect(output.collapseProgress == 0)
-    #expect(output.tabBarFrame == CGRect(x: 0, y: 260, width: 390, height: 48))
-    #expect(output.pinY == 91)
     #expect(output.childContentInset.top == 308)
+    #expect(output.tabBarFrame.minY == 260)
 }
 
 @Test func pinnedLayoutKeepsTabBarAtPinY() {
     var input = CollapsiblePagerLayoutInput.defaultTestValue
-    input.pinAnchorY = input.headerHeights.maxHeight
+    input.pinAnchorY = 260
 
     let output = CollapsiblePagerLayoutEngine().layout(input)
 
     #expect(output.headerVisibleHeight == 0)
     #expect(output.collapseProgress == 1)
-    #expect(output.tabBarFrame.minY == output.pinY)
+    #expect(output.tabBarFrame.minY == 91)
 }
 ```
 
-- [ ] **Step 2: Implement layout models and engine**
+- [ ] **Step 2: 实现 layout model 和 engine**
 
-Use explicit `CollapsiblePagerLayoutInput` and `CollapsiblePagerLayoutOutput` structs. Keep `CGFloat` calculations clamped and deterministic.
+使用 `CollapsiblePagerEdgeInsets` 避免 layout core 依赖 UIKit。`CGRect` 和 `CGFloat` 可来自 CoreGraphics。
 
-- [ ] **Step 3: Add offset policy tests**
+- [ ] **Step 3: 增加 Header 高度变化测试**
 
-Cover `.preserveVisualPosition`, `.preserveCollapseProgress`, `.resetToExpanded`, `.resetToCollapsed` for header height changes in expanded, pinned and partially collapsed states.
+覆盖 `.preserveVisualPosition`、`.preserveCollapseProgress`、`.resetToExpanded`、`.resetToCollapsed`。
 
-- [ ] **Step 4: Run layout-focused tests**
+- [ ] **Step 4: 运行测试**
 
-Run: `swift test --filter LayoutEngineTests`
+Expected: LayoutEngineTests 通过。
 
-Expected: all layout tests pass.
-
-## Task 3: Header Host, Measurement And Containment
+## Task 3: PagePosition 和 indicator focus rect
 
 **Files:**
+
+- Create: `Sources/CollapsiblePager/State/CollapsiblePagerPagePosition.swift`
+- Create: `Sources/CollapsiblePager/TabBar/CollapsiblePagerIndicatorFocusRect.swift`
+- Test: `Tests/CollapsiblePagerTests/PagePositionTests.swift`
+- Test: `Tests/CollapsiblePagerTests/IndicatorFocusRectTests.swift`
+
+**Acceptance:**
+
+- page count 为 0 时 position 为 nil。
+- raw offset 可转换为 from/to/progress/direction。
+- focus rect 从 item frame 连续插值。
+- indicator frame 支持 fixed、title、item、ratio 宽度模式。
+
+- [ ] **Step 1: 写 PagePosition 测试**
+
+```swift
+import CoreGraphics
+import Testing
+@testable import CollapsiblePager
+
+@Test func pagePositionIsNilWhenPageCountIsZero() {
+    #expect(PagePosition.make(rawPosition: 0, pageCount: 0, isInteractive: false) == nil)
+}
+
+@Test func pagePositionInterpolatesForward() throws {
+    let position = try #require(PagePosition.make(rawPosition: 1.25, pageCount: 4, isInteractive: true))
+
+    #expect(position.fromIndex == 1)
+    #expect(position.toIndex == 2)
+    #expect(position.progress == 0.25)
+    #expect(position.direction == .forward)
+    #expect(position.isInteractive)
+}
+```
+
+- [ ] **Step 2: 写 focus rect 测试**
+
+```swift
+import CoreGraphics
+import Testing
+@testable import CollapsiblePager
+
+@Test func focusRectInterpolatesBetweenItems() throws {
+    let itemFrames = [
+        CGRect(x: 0, y: 0, width: 100, height: 48),
+        CGRect(x: 100, y: 0, width: 140, height: 48),
+    ]
+    let titleFrames = [
+        CGRect(x: 30, y: 14, width: 40, height: 20),
+        CGRect(x: 145, y: 14, width: 50, height: 20),
+    ]
+    let position = PagePosition(rawPosition: 0.5, fromIndex: 0, toIndex: 1, progress: 0.5, direction: .forward, isInteractive: true)
+
+    let focusRect = try #require(IndicatorFocusRect.make(itemFrames: itemFrames, titleFrames: titleFrames, position: position))
+    let indicator = focusRect.indicatorFrame(widthMode: .fixed(28), height: 3, bottomInset: 0)
+
+    #expect(focusRect.itemFrame.midX == 120)
+    #expect(indicator.width == 28)
+    #expect(indicator.midX == 120)
+}
+```
+
+- [ ] **Step 3: 实现 PagePosition 和 focus rect**
+
+方向计算使用 raw position 的 lower/upper index。progress clamp 到 `0...1`。越界 raw position clamp 到有效范围。
+
+- [ ] **Step 4: 运行测试**
+
+Expected: PagePositionTests 和 IndicatorFocusRectTests 通过。
+
+## Task 4: Header host 和 containment
+
+**Files:**
+
 - Create: `Sources/CollapsiblePager/Header/CollapsiblePagerHeaderHostView.swift`
+- Create: `Sources/CollapsiblePager/Header/CollapsiblePagerHeaderHostCoordinator.swift`
 - Create: `Sources/CollapsiblePager/Header/CollapsiblePagerHeaderMountView.swift`
 - Create: `Sources/CollapsiblePager/Header/CollapsiblePagerFixedHeaderContainer.swift`
-- Create: `Tests/CollapsiblePagerTests/HeaderHeightTests.swift`
-- Create: `Tests/CollapsiblePagerTests/ContainerLifecycleTests.swift`
+- Test: `Tests/CollapsiblePagerTests/HeaderContainmentTests.swift`
 
-**Acceptance Criteria:**
-- Header accepts both `UIView` and `UIViewController`.
-- Header controller containment is added once under pager and is not re-added during visual host migration.
-- Replacing header content removes old controller with `willMove(toParent: nil)` and `removeFromParent()`.
-- Automatic height uses Auto Layout measurement and supports estimated first layout.
-- Collapse progress is emitted in `0...1`.
+**Acceptance:**
 
-- [ ] **Step 1: Write failing containment tests**
+- Header 支持 `UIView` 和 `UIViewController`。
+- Header controller parent 始终是 pager。
+- host 在 mount/fixed overlay 间迁移不重复 add/remove child。
+- 替换 Header 时正确移除旧 controller。
+
+- [ ] **Step 1: 写 containment 测试**
 
 ```swift
 import Testing
@@ -233,279 +387,52 @@ import UIKit
 @MainActor
 @Test func headerViewControllerContainmentSurvivesHostMigration() {
     let pager = CollapsiblePagerViewController()
+    pager.loadViewIfNeeded()
+    let coordinator = CollapsiblePagerHeaderHostCoordinator(owner: pager)
     let header = UIViewController()
+    let mount = CollapsiblePagerHeaderMountView()
+    let fixed = CollapsiblePagerFixedHeaderContainer()
 
-    pager.mountHeaderForTesting(.viewController(header))
+    coordinator.setContent(.viewController(header), initialContainer: mount)
     #expect(header.parent === pager)
 
-    pager.moveHeaderHostToFixedOverlayForTesting(reason: .horizontalPaging)
+    coordinator.moveHost(to: fixed, reason: .horizontalPaging)
     #expect(header.parent === pager)
 
-    pager.moveHeaderHostToCurrentChildMountForTesting()
+    coordinator.moveHost(to: mount, reason: .currentChild)
     #expect(header.parent === pager)
 }
 ```
 
-- [ ] **Step 2: Implement host and mount views**
+- [ ] **Step 2: 实现 host view 和 containers**
 
-Create host view APIs that can move the hosted visual view between `CollapsiblePagerHeaderMountView` and `CollapsiblePagerFixedHeaderContainer` without changing controller containment.
+`FixedHeaderContainer` 使用 hit-test 穿透策略：容器本身不吃事件，但子视图可以交互。
 
-- [ ] **Step 3: Add automatic height measurement tests**
+- [ ] **Step 3: 实现 coordinator**
 
-Use a test header view with a label constrained to all edges. Verify width-sensitive height changes after text changes and `reloadHeaderLayout`.
+`setContent` 负责旧内容移除、新内容 containment 和 host 添加。`moveHost` 只改 host superview 和 frame。
 
-- [ ] **Step 4: Run header tests**
+- [ ] **Step 4: 运行测试**
 
-Run: `swift test --filter HeaderHeightTests`
+Expected: HeaderContainmentTests 通过。
 
-Expected: measurement and containment tests pass without UIKit lifecycle assertions.
-
-## Task 4: TabBar And Indicator
+## Task 5: ChildStore 和 managed inset
 
 **Files:**
-- Create: `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabBar.swift`
-- Create: `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabIndicator.swift`
-- Create: `Tests/CollapsiblePagerTests/TabIndicatorTests.swift`
 
-**Acceptance Criteria:**
-- Default TabBar renders equal-width text items.
-- Tab item selected state is reflected through accessibility traits, not only indicator.
-- Indicator frame is derived from focus rect and width mode.
-- Tap only emits selection request; TabBar does not mutate child or vertical state.
-- Ongoing tap indicator animation can be interrupted by a newer target.
+- Create: `Sources/CollapsiblePager/Children/CollapsiblePagerChildRecord.swift`
+- Create: `Sources/CollapsiblePager/Children/CollapsiblePagerChildStore.swift`
+- Test: `Tests/CollapsiblePagerTests/ChildStoreTests.swift`
 
-- [ ] **Step 1: Write failing indicator frame tests**
+**Acceptance:**
 
-```swift
-import CoreGraphics
-import Testing
-@testable import CollapsiblePager
+- child 用标准 containment 加入 pager。
+- child 必须遵守 `CollapsiblePagerScrollProviding`。
+- 对 child scroll view 关闭 automatic adjustment。
+- 应用 managed top inset 和 scroll indicator inset。
+- 每个 child 有独立 HeaderMountView。
 
-@Test func fixedUnderlineIndicatorUsesItemCenter() {
-    let itemFrames = [
-        CGRect(x: 0, y: 0, width: 130, height: 48),
-        CGRect(x: 130, y: 0, width: 130, height: 48)
-    ]
-
-    let frame = CollapsiblePagerTabIndicatorLayout.frame(
-        widthMode: .fixed(28),
-        height: 3,
-        bottomInset: 0,
-        itemFrames: itemFrames,
-        titleFrames: itemFrames,
-        tabBarBounds: CGRect(x: 0, y: 0, width: 260, height: 48),
-        position: .init(rawPosition: 0.5, fromIndex: 0, toIndex: 1, progress: 0.5, direction: .forward, isInteractive: true, isCancelled: false)
-    )
-
-    #expect(frame.width == 28)
-    #expect(frame.height == 3)
-    #expect(frame.midX == 130)
-    #expect(frame.maxY == 48)
-}
-```
-
-- [ ] **Step 2: Implement TabBar rendering**
-
-Use `UIButton` or `UIControl` subclasses with `accessibilityIdentifier` hooks and selected accessibility traits. Store titles and layout frames as values.
-
-- [ ] **Step 3: Implement indicator layout and animation coordination**
-
-Keep selection logic outside indicator. Indicator consumes `PagePosition` and item/title frames.
-
-- [ ] **Step 4: Run tab tests**
-
-Run: `swift test --filter TabIndicatorTests`
-
-Expected: fixed, title, item and ratio width modes pass.
-
-## Task 5: Page Container And Page Request Pipeline
-
-**Files:**
-- Create: `Sources/CollapsiblePager/Paging/CollapsiblePagerPagePosition.swift`
-- Create: `Sources/CollapsiblePager/Paging/CollapsiblePagerPageContainer.swift`
-- Create: `Tests/CollapsiblePagerTests/PagePositionTests.swift`
-- Create: `Tests/CollapsiblePagerTests/ContainerLifecycleTests.swift`
-
-**Acceptance Criteria:**
-- Internal `UIScrollView` uses paging and no third-party pager.
-- `PagePosition` includes raw position, from/to index, progress, direction, interactive flag and cancellation flag.
-- Tap, API and gesture requests share one pipeline and commit selected index only after completion.
-- Cancelled horizontal drag restores selected index and indicator state.
-- Consecutive programmatic requests settle on the latest target.
-
-- [ ] **Step 1: Write failing page position tests**
-
-```swift
-import Testing
-@testable import CollapsiblePager
-
-@Test func pagePositionTracksForwardProgress() {
-    let position = CollapsiblePagerPagePosition(rawPosition: 1.25, pageCount: 4, selectedIndex: 1, isInteractive: true)
-
-    #expect(position.fromIndex == 1)
-    #expect(position.toIndex == 2)
-    #expect(position.progress == 0.25)
-    #expect(position.direction == .forward)
-}
-
-@Test func pagePositionClampsAtBounds() {
-    let position = CollapsiblePagerPagePosition(rawPosition: -0.4, pageCount: 3, selectedIndex: 0, isInteractive: true)
-
-    #expect(position.rawPosition == 0)
-    #expect(position.fromIndex == 0)
-    #expect(position.toIndex == 0)
-    #expect(position.direction == .none)
-}
-```
-
-- [ ] **Step 2: Implement page position value type**
-
-Make floating point tolerance explicit for completion checks.
-
-- [ ] **Step 3: Implement page container**
-
-Use standard view controller containment for all loaded pages. Keep source enum values `.tap`, `.api`, `.gesture` internal.
-
-- [ ] **Step 4: Add lifecycle tests**
-
-Assert child `parent`, `didMove`, view hierarchy and selected index commit behavior.
-
-- [ ] **Step 5: Run paging tests**
-
-Run: `swift test --filter PagePositionTests`
-
-Expected: position, clamp and commit tests pass.
-
-## Task 6: Scroll Coordinator And Pin Anchor
-
-**Files:**
-- Create: `Sources/CollapsiblePager/Scroll/CollapsiblePagerPinAnchor.swift`
-- Create: `Sources/CollapsiblePager/Scroll/CollapsiblePagerScrollCoordinator.swift`
-- Create: `Tests/CollapsiblePagerTests/ScrollCoordinatorTests.swift`
-
-**Acceptance Criteria:**
-- Upward scroll collapses Header before child consumes remaining delta.
-- Downward scroll returns child to top before expanding Header.
-- Non-current child offset sync is based on `pinAnchorY` delta, not current child rebound offset.
-- Guarded content offset updates do not recursively re-enter coordinator.
-- Horizontal paging and layout reload phases freeze or ignore vertical observer callbacks.
-
-- [ ] **Step 1: Write failing pin anchor tests**
-
-```swift
-import Testing
-@testable import CollapsiblePager
-
-@Test func upwardDeltaCollapsesHeaderBeforeChildConsumesScroll() {
-    var state = CollapsiblePagerScrollState.expandedTestValue(headerMaxHeight: 260)
-    let result = CollapsiblePagerScrollCoordinator.reduce(state: &state, event: .userVerticalDelta(80))
-
-    #expect(state.pinAnchorY == 80)
-    #expect(state.headerVisibleHeight == 180)
-    #expect(result.childDeltaY == 0)
-}
-
-@Test func topBounceDoesNotPropagatePinAnchorDelta() {
-    var state = CollapsiblePagerScrollState.pinnedTestValue()
-    state.currentChildTopBounceY = -36
-
-    let result = CollapsiblePagerScrollCoordinator.reduce(state: &state, event: .topBounceChanged(-60))
-
-    #expect(result.nonCurrentChildOffsetCorrections.isEmpty)
-}
-```
-
-- [ ] **Step 2: Implement reducer-style core**
-
-Keep reducer inputs as values for Swift Testing. Apply UIKit `contentOffset` writes only in a thin `@MainActor` adapter with guarded update flags.
-
-- [ ] **Step 3: Add integration hooks**
-
-Wire current child `pagerScrollView` observation and ensure non-current pages only receive layout/inset corrections.
-
-- [ ] **Step 4: Run scroll tests**
-
-Run: `swift test --filter ScrollCoordinatorTests`
-
-Expected: collapse, expand, pin, rebound and guarded update cases pass.
-
-## Task 7: Refresh Coordinator
-
-**Files:**
-- Create: `Sources/CollapsiblePager/Refresh/CollapsiblePagerRefreshCoordinator.swift`
-- Create: `Tests/CollapsiblePagerTests/RefreshCoordinatorTests.swift`
-
-**Acceptance Criteria:**
-- Refresh trigger requires Header fully expanded, child at top, no active owner and refresh mode allowed.
-- `.overall` calls pager delegate and sets owner `.pager`.
-- `.child` only triggers if current child conforms to `CollapsiblePagerRefreshableChild`.
-- `.overall` and `.child` never trigger in the same gesture.
-- `endRefreshing()` only ends pager-level owner; child owner remains child-managed.
-- Short and empty content can bounce enough to reveal refresh when mode allows.
-
-- [ ] **Step 1: Write failing refresh eligibility tests**
-
-```swift
-import Testing
-@testable import CollapsiblePager
-
-@Test func refreshIsBlockedUntilHeaderFullyExpanded() {
-    let context = CollapsiblePagerRefreshContext(
-        refreshMode: .overall,
-        headerVisibleHeight: 120,
-        headerMaxHeight: 260,
-        isCurrentChildAtTop: true,
-        activeOwner: nil,
-        currentChildSupportsRefresh: true
-    )
-
-    #expect(CollapsiblePagerRefreshCoordinator.canBeginRefresh(context) == false)
-}
-
-@Test func childModeDoesNotFallbackToOverall() {
-    let context = CollapsiblePagerRefreshContext(
-        refreshMode: .child,
-        headerVisibleHeight: 260,
-        headerMaxHeight: 260,
-        isCurrentChildAtTop: true,
-        activeOwner: nil,
-        currentChildSupportsRefresh: false
-    )
-
-    #expect(CollapsiblePagerRefreshCoordinator.beginOwnerIfPossible(context) == nil)
-}
-```
-
-- [ ] **Step 2: Implement refresh owner state**
-
-Use an internal `RefreshOwner` enum with `.pager` and `.child(index:)`. Do not create a public custom coordinator path in V1.
-
-- [ ] **Step 3: Wire UIRefreshControl**
-
-Attach visual refresh control to the current child scroll view with inset compensation for `.overall`. For `.child`, call child protocol and leave ending to child.
-
-- [ ] **Step 4: Run refresh tests**
-
-Run: `swift test --filter RefreshCoordinatorTests`
-
-Expected: owner exclusivity and trigger priority cases pass.
-
-## Task 8: CollapsiblePagerViewController Integration
-
-**Files:**
-- Create: `Sources/CollapsiblePager/Public/CollapsiblePagerViewController.swift`
-- Replace: `Sources/CollapsiblePager/CollapsiblePager.swift`
-- Update all internal files from Tasks 2-7.
-- Create: `Tests/CollapsiblePagerTests/ContainerIntegrationTests.swift`
-
-**Acceptance Criteria:**
-- `reloadData()` requests header, titles and child controllers from data source and clamps selected index after page count changes.
-- `selectPage(at:animated:)` validates index, routes through page container and notifies delegate only after commit.
-- `reloadHeaderLayout(behavior: .immediate, offsetPolicy: .preserveVisualPosition)` recomputes Header, TabBar, pin threshold, child inset and offset corrections without visible jump.
-- Header layout requests during drag, deceleration, horizontal paging or refresh are marked dirty and applied at idle internally.
-- `endRefreshing()` affects only pager refresh owner.
-
-- [ ] **Step 1: Write failing integration tests**
+- [ ] **Step 1: 写 child store 测试**
 
 ```swift
 import Testing
@@ -513,246 +440,466 @@ import UIKit
 @testable import CollapsiblePager
 
 @MainActor
-@Test func reloadDataClampsSelectedIndexWhenPageCountShrinks() {
-    let dataSource = PagerDataSourceStub(pageCount: 3)
+@Test func childStoreRejectsChildWithoutScrollProvider() {
     let pager = CollapsiblePagerViewController()
-    pager.dataSource = dataSource
-    pager.reloadData()
-    pager.selectPage(at: 2, animated: false)
+    let store = CollapsiblePagerChildStore(owner: pager)
+    let child = UIViewController()
 
-    dataSource.pageCount = 1
-    pager.reloadData()
+    #expect(store.makeRecord(for: child, index: 0, managedTopInset: 308) == nil)
+}
 
-    #expect(pager.selectedIndex == 0)
+@MainActor
+@Test func childStoreAppliesManagedInset() throws {
+    let pager = CollapsiblePagerViewController()
+    let store = CollapsiblePagerChildStore(owner: pager)
+    let child = ScrollChild()
+
+    let record = try #require(store.makeRecord(for: child, index: 0, managedTopInset: 308))
+
+    #expect(record.viewController === child)
+    #expect(record.scrollView.contentInset.top == 308)
+    #expect(record.mountView.superview === child.scrollView)
+}
+
+@MainActor
+private final class ScrollChild: UIViewController, CollapsiblePagerScrollProviding {
+    let scrollView = UIScrollView()
+    var pagerScrollView: UIScrollView { scrollView }
 }
 ```
 
-- [ ] **Step 2: Implement root container and wiring**
+- [ ] **Step 2: 实现 ChildRecord**
 
-Create root view hierarchy with page container behind fixed header container. Keep all UIKit work on `@MainActor`.
+记录 `index`、`viewController`、`scrollView`、`mountView`、`lastKnownContentOffsetY`。
 
-- [ ] **Step 3: Implement public methods**
+- [ ] **Step 3: 实现 ChildStore**
 
-Make invalid index selection a no-op with assertion in debug builds. Keep delegate notifications deterministic.
+`makeRecord` 做 provider 校验和 inset 应用。`attach`/`detach` 使用 `addChild`、`didMove`、`willMove`、`removeFromParent`。
 
-- [ ] **Step 4: Run full package tests**
+- [ ] **Step 4: 运行测试**
 
-Run: `swift test`
+Expected: ChildStoreTests 通过。
 
-Expected: all core tests pass.
-
-## Task 9: Example App Scenario Harness
+## Task 6: PageRequestPipeline 和 PageContainer
 
 **Files:**
+
+- Create: `Sources/CollapsiblePager/Paging/CollapsiblePagerPageRequestPipeline.swift`
+- Create: `Sources/CollapsiblePager/Paging/CollapsiblePagerPageContainer.swift`
+- Test: `Tests/CollapsiblePagerTests/PageRequestPipelineTests.swift`
+
+**Acceptance:**
+
+- Tab/API/gesture 使用同一请求模型。
+- selectedIndex 只在 complete 时提交。
+- cancel 回滚到来源 index。
+- 空页和越界请求 no-op。
+- 快速连续请求合并到最后目标。
+
+- [ ] **Step 1: 写 pipeline 测试**
+
+```swift
+import Testing
+@testable import CollapsiblePager
+
+@Test func pageRequestDoesNotCommitUntilCompletion() {
+    var state = CollapsiblePagerState.initial(pageCount: 3)
+    let pipeline = PageRequestPipeline()
+
+    let accepted = pipeline.request(.init(source: .tabTap, fromIndex: 0, targetIndex: 2, animated: true), state: &state)
+
+    #expect(accepted)
+    #expect(state.selectedIndex == 0)
+    #expect(state.pendingSelectedIndex == 2)
+
+    pipeline.complete(targetIndex: 2, state: &state)
+
+    #expect(state.selectedIndex == 2)
+    #expect(state.effectiveSelectedIndex == 2)
+    #expect(state.pendingSelectedIndex == nil)
+}
+
+@Test func cancelledPageRequestRollsBackPendingSelection() {
+    var state = CollapsiblePagerState.initial(pageCount: 3)
+    let pipeline = PageRequestPipeline()
+
+    _ = pipeline.request(.init(source: .gesture, fromIndex: 0, targetIndex: 1, animated: true), state: &state)
+    pipeline.cancel(sourceIndex: 0, state: &state)
+
+    #expect(state.selectedIndex == 0)
+    #expect(state.effectiveSelectedIndex == 0)
+    #expect(state.pendingSelectedIndex == nil)
+}
+```
+
+- [ ] **Step 2: 实现 state 和 pipeline**
+
+`CollapsiblePagerState.initial(pageCount:)` 在 pageCount 为 0 时设置 `effectiveSelectedIndex = nil`。
+
+- [ ] **Step 3: 实现 PageContainer skeleton**
+
+先完成 scroll view 初始化、paging 配置、delegate forwarding、raw position 计算。child 布局和集成在 Task 10。
+
+- [ ] **Step 4: 运行测试**
+
+Expected: PageRequestPipelineTests 通过。
+
+## Task 7: TabBar 和 indicator view
+
+**Files:**
+
+- Create: `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabBarView.swift`
+- Create: `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabItemView.swift`
+- Create: `Sources/CollapsiblePager/TabBar/CollapsiblePagerUnderlineIndicatorView.swift`
+- Test: `Tests/CollapsiblePagerTests/TabBarViewTests.swift`
+
+**Acceptance:**
+
+- TabBar 渲染等宽 item。
+- 点击只发 request callback。
+- selected progress 更新 item 样式和 accessibility。
+- indicator 使用 focus rect。
+- 空页时没有 item 和 indicator。
+
+- [ ] **Step 1: 写 TabBar 测试**
+
+```swift
+import Testing
+import UIKit
+@testable import CollapsiblePager
+
+@MainActor
+@Test func tabBarTapOnlyEmitsRequest() {
+    let tabBar = CollapsiblePagerTabBarView()
+    var requestedIndex: Int?
+    tabBar.onRequestSelection = { requestedIndex = $0 }
+
+    tabBar.reloadTitles(["A", "B", "C"])
+    tabBar.layoutIfNeeded()
+    tabBar.itemView(at: 1)?.sendActions(for: .touchUpInside)
+
+    #expect(requestedIndex == 1)
+}
+
+@MainActor
+@Test func tabBarEmptyStateHasNoItemsAndNoIndicator() {
+    let tabBar = CollapsiblePagerTabBarView()
+
+    tabBar.reloadTitles([])
+
+    #expect(tabBar.itemCount == 0)
+    #expect(tabBar.indicatorFrame == nil)
+}
+```
+
+- [ ] **Step 2: 实现 item view**
+
+`selectionProgress` clamp 到 `0...1`，更新 title color/font 和 `accessibilityTraits`。
+
+- [ ] **Step 3: 实现 TabBar view**
+
+使用 `UIStackView` 或手动等宽布局。V1 不实现横向滚动。
+
+- [ ] **Step 4: 运行测试**
+
+Expected: TabBarViewTests 通过。
+
+## Task 8: PinAnchor 和纵向滚动协调
+
+**Files:**
+
+- Create: `Sources/CollapsiblePager/State/CollapsiblePagerPinAnchor.swift`
+- Create: `Sources/CollapsiblePager/Scroll/CollapsiblePagerVerticalScrollCoordinator.swift`
+- Test: `Tests/CollapsiblePagerTests/PinAnchorTests.swift`
+- Test: `Tests/CollapsiblePagerTests/VerticalScrollCoordinatorTests.swift`
+
+**Acceptance:**
+
+- 当前 child 以外的 scroll event 被忽略。
+- 横向切页期间纵向 event 被忽略。
+- 主动 setContentOffset 使用 guarded update。
+- 非当前 child 只按 pin delta 同步。
+- 顶部回弹和完全吸顶不传播错误 offset。
+
+- [ ] **Step 1: 写 PinAnchor 测试**
+
+```swift
+import Testing
+@testable import CollapsiblePager
+
+@Test func pinAnchorReportsDeltaOnlyWhenValueChanges() {
+    var anchor = PinAnchor(value: 0)
+
+    #expect(anchor.update(to: 20) == 20)
+    #expect(anchor.update(to: 20) == 0)
+    #expect(anchor.update(to: 5) == -15)
+}
+```
+
+- [ ] **Step 2: 写顶部回弹测试**
+
+```swift
+import Testing
+@testable import CollapsiblePager
+
+@Test func topBounceDoesNotPropagatePinDelta() {
+    var model = VerticalScrollModel(pinAnchorY: 0, pinThreshold: 260, managedTopInset: 308)
+
+    let result = model.handleCurrentOffsetY(-340)
+
+    #expect(result.pinDeltaY == 0)
+    #expect(result.shouldSyncNonCurrentChildren == false)
+}
+```
+
+- [ ] **Step 3: 实现 pin anchor 和 scroll model**
+
+先实现纯值 `VerticalScrollModel`，再由 UIKit coordinator 调用它。这样复杂规则可单测。
+
+- [ ] **Step 4: 实现 UIKit coordinator**
+
+观察 current child scroll view，检查 phase，调用 model，应用 guarded offset。
+
+- [ ] **Step 5: 运行测试**
+
+Expected: PinAnchorTests 和 VerticalScrollCoordinatorTests 通过。
+
+## Task 9: RefreshHandoff 和 GestureArbiter
+
+**Files:**
+
+- Create: `Sources/CollapsiblePager/Refresh/CollapsiblePagerRefreshHandoffCoordinator.swift`
+- Create: `Sources/CollapsiblePager/Gesture/CollapsiblePagerGestureArbiter.swift`
+- Test: `Tests/CollapsiblePagerTests/RefreshHandoffTests.swift`
+- Test: `Tests/CollapsiblePagerTests/GestureArbiterTests.swift`
+
+**Acceptance:**
+
+- Header 未展开时不 handoff。
+- `.overall` 和 `.child` 同手势互斥。
+- `.child` 不降级 `.overall`。
+- 不暴露 refresh delegate。
+- 系统返回手势优先。
+
+- [ ] **Step 1: 写 RefreshHandoff 测试**
+
+```swift
+import Testing
+@testable import CollapsiblePager
+
+@Test func refreshHandoffRequiresExpandedHeaderAndTopChild() {
+    var coordinator = RefreshHandoffCoordinator(mode: .child)
+
+    #expect(coordinator.tryBeginHandoff(headerIsExpanded: false, childIsAtTop: true, index: 0) == nil)
+    #expect(coordinator.tryBeginHandoff(headerIsExpanded: true, childIsAtTop: false, index: 0) == nil)
+    #expect(coordinator.tryBeginHandoff(headerIsExpanded: true, childIsAtTop: true, index: 0) == .externalScrollView(scope: .child, index: 0))
+}
+
+@Test func refreshHandoffOnlyBeginsOncePerGesture() {
+    var coordinator = RefreshHandoffCoordinator(mode: .overall)
+
+    let first = coordinator.tryBeginHandoff(headerIsExpanded: true, childIsAtTop: true, index: 1)
+    let second = coordinator.tryBeginHandoff(headerIsExpanded: true, childIsAtTop: true, index: 1)
+
+    #expect(first == .externalScrollView(scope: .overall, index: 1))
+    #expect(second == nil)
+}
+```
+
+- [ ] **Step 2: 实现 handoff coordinator**
+
+`resetGesture()` 在新下拉手势开始或结束后调用。Coordinator 不持有 UIKit 刷新控件。
+
+- [ ] **Step 3: 实现 gesture arbiter 纯判断**
+
+提供 `gesturePriority(for:)` 纯值方法，UIKit delegate 只桥接输入。
+
+- [ ] **Step 4: 运行测试**
+
+Expected: RefreshHandoffTests 和 GestureArbiterTests 通过。
+
+## Task 10: 容器集成
+
+**Files:**
+
+- Modify: `Sources/CollapsiblePager/Public/CollapsiblePagerViewController.swift`
+- Modify: `Sources/CollapsiblePager/Paging/CollapsiblePagerPageContainer.swift`
+- Modify: `Sources/CollapsiblePager/Header/CollapsiblePagerHeaderHostCoordinator.swift`
+- Modify: `Sources/CollapsiblePager/Children/CollapsiblePagerChildStore.swift`
+- Test: `Tests/CollapsiblePagerTests/ContainerIntegrationTests.swift`
+
+**Acceptance:**
+
+- `reloadData()` 完整连接 Header、TabBar、PageContainer 和 ChildStore。
+- page count 为 0 时进入空态。
+- page count 变小时 clamp effective selection。
+- `selectPage` 进入 request pipeline。
+- page completion 后 delegate 通知一次。
+
+- [ ] **Step 1: 写容器集成测试**
+
+```swift
+import Testing
+import UIKit
+@testable import CollapsiblePager
+
+@MainActor
+@Test func reloadDataWithNoPagesKeepsPublicSelectedIndexZeroAndClearsEffectiveSelection() {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 0)
+    pager.dataSource = dataSource
+
+    pager.reloadData()
+
+    #expect(pager.selectedIndex == 0)
+    #expect(pager.effectiveSelectedIndex == nil)
+}
+
+@MainActor
+@Test func selectPageCommitsAfterPageContainerCompletes() {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    let delegate = SelectionRecorder()
+    pager.dataSource = dataSource
+    pager.delegate = delegate
+    pager.reloadData()
+
+    pager.selectPage(at: 2, animated: true)
+    #expect(pager.selectedIndex == 0)
+
+    pager.completePendingPageTransitionForTesting(targetIndex: 2)
+
+    #expect(pager.selectedIndex == 2)
+    #expect(delegate.selectedIndexes == [2])
+}
+```
+
+- [ ] **Step 2: 实现 test fixtures**
+
+`DemoDataSource` 返回 `UIView()` Header 和遵守 `CollapsiblePagerScrollProviding` 的 child。
+
+- [ ] **Step 3: 集成 reloadData**
+
+顺序：读取 count、更新 state、刷新 Header、刷新 TabBar、加载有效 child、应用 layout。
+
+- [ ] **Step 4: 集成 selectPage**
+
+调用 PageRequestPipeline；PageContainer 完成后提交并通知 delegate。
+
+- [ ] **Step 5: 运行测试**
+
+Expected: ContainerIntegrationTests 通过。
+
+## Task 11: 示例 App
+
+**Files:**
+
 - Modify: `Examples/Examples.xcodeproj/project.pbxproj`
 - Modify: `Examples/Examples/ViewController.swift`
 - Create: `Examples/Examples/DemoPagerFactory.swift`
 - Create: `Examples/Examples/DemoHeaderView.swift`
 - Create: `Examples/Examples/DemoListViewController.swift`
-- Create: `Examples/Examples/DemoAccessibility.swift`
-- Update: `Examples/ExamplesTests/ExamplesTests.swift`
+- Create: `Examples/Examples/DemoRefreshController.swift`
+- Modify: `Examples/ExamplesUITests/ExamplesUITests.swift`
 
-**Acceptance Criteria:**
-- Example app launches directly into a working pager, not a marketing or placeholder screen.
-- Launch arguments select scenarios: default, overall refresh, child refresh, short content, empty content, dynamic header.
-- Demo views expose stable accessibility identifiers for UI tests.
-- Demo content remains business-like sample UI but core package contains no profile-specific business types.
+**Acceptance:**
 
-- [ ] **Step 1: Add accessibility id contract**
+- 示例 App 使用核心包 public API 接入。
+- Header 内容是业务外部 demo，不写入核心包。
+- `.overall` 和 `.child` 刷新都由 demo child 自己安装。
+- UI test 覆盖基础展开、切页和空态。
 
-```swift
-enum DemoAccessibility {
-    static let pagerRoot = "pager.root"
-    static let header = "pager.header"
-    static let tabBar = "pager.tabbar"
-    static func tab(_ index: Int) -> String { "pager.tab.\(index)" }
-    static let indicator = "pager.indicator"
-    static func pageScroll(_ index: Int) -> String { "pager.page.\(index).scroll" }
-    static let selectedPageLabel = "demo.selectedPage"
-    static let collapseProgressLabel = "demo.collapseProgress"
-    static let refreshCountLabel = "demo.refreshCount"
-}
-```
+- [ ] **Step 1: 创建 demo factory**
 
-- [ ] **Step 2: Build demo pager**
+Factory 提供三种场景：长内容、短内容、空内容。每个 child 都遵守 `CollapsiblePagerScrollProviding`。
 
-Use three pages with deterministic row labels. Set child scroll accessibility ids. Add one short-content page and one empty-content scenario for refresh checks.
+- [ ] **Step 2: 创建 demo header**
 
-- [ ] **Step 3: Add launch argument routing**
+Header 只展示示例占位文本和高度变化按钮，用于触发 `reloadHeaderLayout`。
 
-Support `-CollapsiblePagerScenario default|overallRefresh|childRefresh|shortContent|emptyContent|dynamicHeader`.
+- [ ] **Step 3: 创建 demo refresh controller**
 
-- [ ] **Step 4: Build example app**
+使用系统 `UIRefreshControl` 或自定义 view 都可以，但只存在于 Examples target。核心 target 不引用刷新控件类型。
 
-Run: `xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'generic/platform=iOS Simulator' build`
+- [ ] **Step 4: 写 UI test**
 
-Expected: app builds on iOS Simulator destination.
+覆盖 launch、点击 Tab、空态不崩溃、下拉前 Header 先展开。
 
-## Task 10: Necessary UI Tests
-
-**Files:**
-- Replace: `Examples/ExamplesUITests/ExamplesUITests.swift`
-- Keep: `Examples/ExamplesUITests/ExamplesUITestsLaunchTests.swift`
-
-**Acceptance Criteria:**
-- UI tests validate real gesture behavior that unit tests cannot prove: Header pinning, refresh priority, Tab switching, scroll position preservation and latest-target commit.
-- UI tests use accessibility identifiers and visible labels instead of pixel-perfect screenshots.
-- Flaky gesture cases such as cancelled horizontal pan and top rebound page switch remain manual QA unless a deterministic XCTest gesture can be introduced.
-
-- [ ] **Step 1: Add launch helper**
-
-```swift
-@MainActor
-private func launchApp(scenario: String = "default") -> XCUIApplication {
-    let app = XCUIApplication()
-    app.launchArguments += ["-CollapsiblePagerScenario", scenario]
-    app.launch()
-    return app
-}
-```
-
-- [ ] **Step 2: Test initial expanded state**
-
-```swift
-@MainActor
-func testInitialExpandedStateShowsHeaderTabBarAndFirstPage() {
-    let app = launchApp()
-
-    XCTAssertTrue(app.otherElements["pager.header"].waitForExistence(timeout: 3))
-    XCTAssertTrue(app.otherElements["pager.tabbar"].exists)
-    XCTAssertTrue(app.buttons["pager.tab.0"].isSelected)
-    XCTAssertTrue(app.scrollViews["pager.page.0.scroll"].exists)
-}
-```
-
-- [ ] **Step 3: Test vertical scroll pins TabBar**
-
-Gesture: swipe up on first page until Header collapses.
-
-Expected: `demo.collapseProgress` reaches `1.00`, TabBar remains hittable, first page rows continue scrolling under it, no header overlap with visible row.
-
-- [ ] **Step 4: Test pull-down expands before refresh**
-
-Scenario: `overallRefresh`.
-
-Gesture: first pin Header, then pull down once.
-
-Expected: collapse progress decreases before `demo.refreshCount` changes. A second pull after progress reaches `0.00` increments refresh count to `1`.
-
-- [ ] **Step 5: Test child refresh does not fallback**
-
-Scenario: `childRefresh`.
-
-Gesture: switch to a child without refresh support and pull beyond threshold.
-
-Expected: `demo.refreshCount` remains `0`. Switch to refreshable child and pull beyond threshold; child refresh marker increments.
-
-- [ ] **Step 6: Test tab tap and latest target commit**
-
-Gesture: tap tab 1, then tap tab 2 quickly.
-
-Expected: selected page label becomes `2`, tab 2 has selected accessibility trait, and page 2 scroll view exists.
-
-- [ ] **Step 7: Test scroll position preservation**
-
-Gesture: scroll page 0 to a visible marker row, switch to page 1 and scroll differently, switch back to page 0.
-
-Expected: marker row from page 0 remains near its prior visual position and Header state remains consistent with `pinAnchorY`.
-
-- [ ] **Step 8: Test short-content refresh**
-
-Scenario: `shortContent`.
-
-Gesture: pull down on short content page.
-
-Expected: scroll view bounces and refresh marker increments when refresh mode allows.
-
-- [ ] **Step 9: Run UI tests**
+- [ ] **Step 5: 运行示例构建**
 
 Run:
 
 ```sh
-xcrun simctl list devices available
-xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'platform=iOS Simulator,name=<Simulator Name>' test
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'generic/platform=iOS Simulator' build
 ```
 
-Expected: the UI tests above pass on one available simulator.
+Expected: Examples build 通过。
 
-## Task 11: Documentation And Final Verification
+## Task 12: 文档同步和最终审计
 
 **Files:**
-- Modify only if behavior changed: `docs/requirements-and-architecture.md`
-- Modify only if UI/DSL changed: `docs/ui-design-and-animation-dsl.md`
 
-**Acceptance Criteria:**
-- Public API, first version scope and docs remain aligned.
-- No old API names or deferred public behaviors are documented as implemented.
-- No trailing whitespace or malformed markdown diff.
+- Modify: `docs/requirements-and-architecture.md`
+- Modify: `docs/ui-design-and-animation-dsl.md`
+- Modify: `docs/superpowers/plans/2026-07-03-collapsible-pager-v1.md`
 
-- [ ] **Step 1: Run package validation**
+**Acceptance:**
 
-Run: `swift test`
+- 文档与实现 public API 一致。
+- 旧 API 名称没有残留。
+- 没有刷新 delegate 或 refreshable child 描述。
+- 第一版范围和后续阶段一致。
 
-Expected: all Swift Testing tests pass.
+- [ ] **Step 1: 扫描旧术语**
 
-- [ ] **Step 2: Run example build**
+Run:
 
-Run: `xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'generic/platform=iOS Simulator' build`
+```sh
+rg "RefreshableChild|DidTriggerRefresh|UIRefreshControl.*必须|deferredUntilIdle|selectedIndex: Int\\?" docs Sources Tests -g '!docs/superpowers/plans/2026-07-03-collapsible-pager-v1.md'
+```
 
-Expected: build succeeds with no new Swift 6 concurrency warnings.
+Expected: 没有匹配结果。示例 App 可以出现 `UIRefreshControl`，核心 target 和架构文档不能要求它。
 
-- [ ] **Step 3: Run UI tests on an available simulator**
-
-Run: `xcrun simctl list devices available`, choose a simulator, then run the `xcodebuild ... test` command from Task 10.
-
-Expected: required UI tests pass.
-
-- [ ] **Step 4: Run documentation hygiene checks**
+- [ ] **Step 2: 运行格式检查**
 
 Run:
 
 ```sh
 git diff --check
-rg -n "deferredUntilIdle|animated\\(|横向滚动 TabBar|自动查找第一个" Sources Tests Examples docs
 ```
 
-Expected: no whitespace errors; search results only appear in docs as non-goals or second-stage descriptions.
+Expected: 无 trailing whitespace 或 patch 格式错误。
 
-## Global Acceptance Checklist
+- [ ] **Step 3: 运行核心测试**
 
-- Header 向上滚动先折叠，折叠完成后 child 才继续滚动。
-- Header 向下滚动时 child 先回到顶部，再展开 Header。
-- Header 未完全展开时不能触发刷新。
-- `.overall` 与 `.child` 刷新 owner 在一次下拉手势中互斥。
-- TabBar 默认吸顶到导航栏下方或安全区顶部。
-- Tab item selected 状态可被无障碍读取。
-- 点击 Tab、API 选择和横向滑动都进入同一 page request pipeline。
-- 横向滑动取消时 Tab 和 indicator 回到来源状态。
-- 不同 child 保留自己的滚动位置。
-- `reloadHeaderLayout` immediate 路径更新 Header、TabBar、child inset、pin threshold 和 offset correction，并保持视觉位置。
-- Header controller 的 UIKit containment 在视觉宿主迁移中保持稳定。
-- 所有 UIKit 公开入口和回调保持 `@MainActor`。
-- 核心包不出现个人主页、头像、作品列表等业务专属类型。
+Run:
 
-## Manual QA Matrix
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17' test
+```
 
-These cases are necessary before declaring V1 shippable, even if not all are automated:
+Expected: 所有核心测试通过，无新增 Swift 6 并发警告。
 
-| Scenario | Expected Result |
-| --- | --- |
-| 纵向减速未结束时点击 Tab | Header 宿主固定，最终目标页稳定提交 |
-| 顶部回弹过程中横向切页 | Header 不与列表顶部脱钩，切页后按目标 child 校准 |
-| 局部刷新 reveal 期间尝试横向切页 | 第一版禁止或延迟切页，不能双 owner 刷新 |
-| 横竖屏切换 | 复用 layout invalidation，selected index 与 scroll position 合法 |
-| Dynamic Type 调大 | Tab frame、indicator frame、automatic Header height 更新 |
-| 导航第一页右滑返回 | 系统返回手势优先于横向分页 |
-| Header 文本短变长再变短 | `reloadHeaderLayout` 不产生明显跳动 |
+- [ ] **Step 4: 审查 diff**
 
-## Execution Order
+Run:
 
-1. Task 1 and Task 2 establish public types and pure layout tests.
-2. Task 3, Task 4 and Task 5 build independent UI primitives.
-3. Task 6 and Task 7 add state coordination.
-4. Task 8 wires the public container.
-5. Task 9 and Task 10 create the demo and UI tests.
-6. Task 11 verifies package, example build, UI tests and docs.
+```sh
+git status --short
+git diff -- docs Sources Tests
+```
+
+Expected: 只包含本计划相关文件。
+
+## 执行策略
+
+推荐使用 Subagent-Driven：
+
+1. 每个 task 一个 fresh subagent。
+2. 主线程审查 task diff。
+3. 先测试后实现。
+4. 每个 task 完成后运行对应测试。
+
+Inline Execution 也可行，但需要每 1 到 2 个 task 做一次人工检查，避免状态机实现偏离本文档。
+
+仓库约定：只有用户明确要求提交、推送或创建 PR 时，才执行 `git add`、`git commit`、`git push` 或 PR 操作。计划中的 task 边界可作为未来提交拆分参考，不代表自动提交。

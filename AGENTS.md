@@ -29,35 +29,41 @@
 - `Examples/ExamplesUITests/`: 示例 App UI 测试，使用 XCTest。
 - `docs/requirements-and-architecture.md`: 需求、公开 API、内部架构和第一版范围的主文档。
 - `docs/ui-design-and-animation-dsl.md`: 默认 UI、动画交互和验收 DSL 文档。
+- `docs/superpowers/plans/2026-07-03-collapsible-pager-v1.md`: V1 重写实施计划；当前源码按该计划从干净占位模块重建。
 - `docs/assets/`: 文档效果图资源。
 
 ## Source Of Truth
 
 - 架构和 API 设计以 `docs/requirements-and-architecture.md` 为第一优先级。
 - UI、动画、手势交互和验收语义以 `docs/ui-design-and-animation-dsl.md` 为第一优先级。
+- 具体实现顺序以 `docs/superpowers/plans/2026-07-03-collapsible-pager-v1.md` 为第一优先级。
 - 如果代码与文档冲突，先确认用户意图；除非用户明确要求，否则优先让代码回到文档描述的第一版范围。
 - 不要把后续阶段能力提前塞进第一版实现。后续阶段包括但不限于可横向滚动 TabBar、自定义指示器、Header 下拉拉伸、Header 布局刷新动画、自定义 Header 高度 provider、自定义 TabBar layout provider。
 
 ## Architecture References
 
-- Nested scrolling、悬浮吸顶、Header 挂载迁移、整体/局部刷新和手势冲突处理参考 [SPStore/NestedPageViewController](https://github.com/SPStore/NestedPageViewController)，已阅读版本 `94cc01a`。
+- Nested scrolling、悬浮吸顶、Header 挂载迁移、整体/局部刷新 handoff、下拉刷新边界和手势冲突处理参考 [SPStore/NestedPageViewController](https://github.com/SPStore/NestedPageViewController)，已阅读版本 `94cc01a`。
 - Tab 点击切换、横向滑动切页、Tab selected progress、indicator focus rect 和状态提交链路参考 [uias/Tabman](https://github.com/uias/Tabman)，已阅读版本 `b666020`。
+- 两个参考库侧重点不同：NestedPageViewController 只作为纵向嵌套滚动和 Header/刷新/手势边界参考；Tabman 只作为横向分页、Tab 渲染和状态提交链路参考。
 - 参考项目只提供架构启发，不作为运行时依赖；不要直接复制第三方 public API、命名或内部结构。
 - 真正落地到本项目的设计结论必须写回 `docs/requirements-and-architecture.md` 和 `docs/ui-design-and-animation-dsl.md`，并保持第一版范围一致。
 
 ## Architecture Rules
 
 - `CollapsiblePagerViewController` 是公开容器，负责编排 data source、delegate、child view controller 和内部协调器。
-- 核心组件只负责布局、容器管理、TabBar、分页、手势、滚动协调和刷新触发；业务方负责 Header 内容、child 内容、业务数据和网络刷新。
+- 核心组件只负责布局、容器管理、TabBar、分页、手势、滚动协调和刷新 handoff；业务方负责 Header 内容、child 内容、业务数据、刷新控件、刷新任务和结束时机。
 - Header content 必须支持 `UIView` 和 `UIViewController`。当 Header 是 controller 时，使用标准 UIKit containment；Header 视觉宿主迁移时只移动 controller 的 `view`，不反复 add/remove child controller。
 - 第一版 child 主滚动视图必须通过 `CollapsiblePagerScrollProviding` 显式提供；不要默认自动查找第一个 scroll view。
-- 纵向滚动协调必须基于内部 `pin anchor` 和 layout engine 输出的阈值，不要只靠当前 child 的 `contentOffset.y` 反推全局状态。
+- 纵向滚动协调必须基于内部 `PinAnchor` 和 layout engine 输出的阈值，不要只靠当前 child 的 `contentOffset.y` 反推全局状态。
 - Header/TabBar 视觉宿主应能在当前 child 的 `HeaderMountView` 和 fixed overlay 之间迁移，用于吸顶、横向切页、回弹、刷新 reveal 和布局刷新冲突处理。
 - TabBar 只负责渲染和发出选择请求，不直接修改 child 或纵向滚动状态。
 - 点击 Tab、API 选择和横向拖拽必须进入同一套 page request pipeline；最终 selected index 由 page container 完成或取消后统一提交。
+- 对外 `selectedIndex` 默认等于 `0`；当 `pageCount == 0` 时，内部 `effectiveSelectedIndex` 为 `nil`，不加载 child，不渲染 Tab item，不显示 indicator，选择请求为 no-op。
+- 横向分页状态以 `PagePosition` 为唯一输入；Tab selected progress、indicator frame 和后续可横向滚动 TabBar 的 focus rect 都从 `PagePosition` 推导。
 - 横向分页第一版使用内部 `UIScrollView` paging 容器，不使用 `UIPageViewController`，也不引入第三方分页库。
-- 刷新必须有唯一 owner。`.overall` 与 `.child` 不得在同一次下拉手势中同时触发；Header 展开优先级高于刷新。
-- `reloadHeaderLayout` 第一版只公开 immediate 行为，并保持视觉位置；拖拽、减速、横向切页或刷新动画中的布局请求由内部 idle 合并调度处理，不公开 `deferredUntilIdle` 作为 API。
+- 刷新必须有唯一 handoff 目标。`.overall` 与 `.child` 不得在同一次下拉手势中同时移交；Header 展开优先级高于刷新。
+- 核心包不得要求 `UIRefreshControl`，不得新增专门的刷新 child 协议，也不得通过 delegate 转发刷新事件；外部刷新机制自行决定是否开始和何时结束。
+- `reloadHeaderLayout` 第一版只公开 immediate 行为，并保持视觉位置；拖拽、减速、横向切页或刷新动画中的布局请求由内部 idle 合并调度处理，不公开延迟布局行为作为 API。
 
 ## Swift Safe Concurrency And UIKit Guidelines
 
@@ -86,7 +92,7 @@
 - 参数、返回值、错误和注意事项采用 DocC/iOS SDK 常见结构，例如 `- Parameters:`、`- Returns:`、`- Throws:`、`- Note:`、`- Warning:`；没有实际信息时不要为了格式凑小节。
 - API 注释应描述“调用者可以依赖什么”和“调用者需要保证什么”，例如是否必须在 `MainActor` 调用、是否会触发布局重算、是否保持视觉位置、是否会回调 delegate。
 - internal/private 注释只解释“为什么”和“不变量”，不要复述“这行代码做了什么”。
-- 滚动状态机、Header mount/fixed overlay 迁移、`pin anchor`、offset 修正、刷新 owner、手势仲裁和并发隔离点必须在关键类型或关键分支附近写明设计意图。
+- 滚动状态机、Header mount/fixed overlay 迁移、`PinAnchor`、offset 修正、刷新 handoff、手势仲裁和并发隔离点必须在关键类型或关键分支附近写明设计意图。
 - 对安全并发相关代码，注释应说明 actor 隔离、`Sendable` 依据、任务取消语义或为什么必须回到 `MainActor`。
 - `TODO`、`FIXME` 必须带原因、后续动作或阶段归属；不要留下没有 owner 和上下文的占位注释。
 - 示例 App 可以写面向阅读的演示注释；核心库注释要保持组件化语气，避免出现个人主页等业务专属解释。
@@ -95,8 +101,8 @@
 ## Testing
 
 - 核心逻辑优先写 Swift Testing 单元测试，位置在 `Tests/CollapsiblePagerTests/`。
-- Layout engine、Header 高度 clamp、TabBar frame、pin threshold、offset policy、刷新资格、selected index clamp、PagePosition 和 indicator focus rect 都应可单测。
-- UIKit 生命周期、controller containment、Header mount/fixed overlay 迁移、刷新 owner 互斥和导航返回手势优先级应通过集成测试或示例工程手动 QA 覆盖。
+- Layout engine、Header 高度 clamp、TabBar frame、pin threshold、offset policy、刷新资格、selected index/effective selected index 兜底、PagePosition 和 indicator focus rect 都应可单测。
+- UIKit 生命周期、controller containment、Header mount/fixed overlay 迁移、刷新 handoff 互斥和导航返回手势优先级应通过集成测试或示例工程手动 QA 覆盖。
 - 改动示例 App 用户流程时，按需要更新 `Examples/ExamplesTests/` 或 `Examples/ExamplesUITests/`。
 - 文档或架构调整至少运行 `git diff --check`，并用 `rg` 扫描旧 API 名称或已废弃设计是否残留。
 
@@ -105,12 +111,10 @@
 Swift Package:
 
 ```sh
-swift build
+xcodebuild -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=<Simulator Name>' test
 ```
 
-```sh
-swift test
-```
+核心包依赖 UIKit，是 iOS-only Swift Package。`swift build` / `swift test` 可能按 macOS 目标编译并找不到 UIKit；实现和验证优先使用 iOS Simulator 的 `xcodebuild` 命令。
 
 Examples 工程:
 
@@ -144,7 +148,7 @@ xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'p
 - 不要 stage 或提交用户已有的无关修改；如果相关文件里混有用户改动，先阅读并保留它们，只提交本次任务需要的最小范围。
 - 提交前必须运行与改动范围匹配的验证：
   - 文档类改动至少运行 `git diff --check`，并按需要用 `rg` 扫描旧术语、旧 API 或互相矛盾的描述。
-  - Swift Package 行为改动优先运行 `swift test`，并确认没有新增 Swift 6 安全并发警告。
+  - Swift Package 行为改动优先运行 `xcodebuild -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=<Simulator Name>' test`，并确认没有新增 Swift 6 安全并发警告。
   - 示例 App 或 UIKit 集成改动按需要运行 `xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'generic/platform=iOS Simulator' build`。
 - Commit message 优先使用 Conventional Commits 风格，允许中文摘要，例如 `docs: 补充架构设计与代理协作规则`、`feat: 实现 Header 高度测量`、`fix: 修正刷新手势仲裁`。
 - 单个提交应聚焦一个意图。不要把无关格式化、文档整理、功能实现和测试修复混在一个提交里。
