@@ -58,7 +58,7 @@ Header 完全折叠，TabBar 吸顶到导航栏或安全区下方，child 页面
 
 ### 刷新准备态
 
-Header 已完全展开后继续下拉，才进入刷新准备状态。该状态用于验证“先展开 Header，再触发刷新”的交互优先级。`[REQ-5.1]` `[REQ-5.6]` `[REQ-10]`
+Header 已完全展开后继续下拉，才进入刷新准备状态。默认刷新视觉使用系统 `UIRefreshControl`：TabBar 保持在 Header 下方，系统 spinner 出现在当前 child scroll view 顶部、TabBar 下方和列表内容上方，不提供自定义刷新文案。该状态用于验证“先展开 Header，再触发刷新”的交互优先级。`[REQ-5.1]` `[REQ-5.6]` `[REQ-10]`
 
 <img src="assets/collapsible-pager-refresh-ready.png" alt="CollapsiblePager 刷新准备态 UI 效果图" width="280">
 
@@ -166,7 +166,7 @@ collapseProgress = clamp(
 | `collapsing` | 向上滚动且 Header 未到最小高度 | Header 跟随手指折叠，child 暂不消费向上滚动 | Header 到最小高度 | `[REQ-5.1]` |
 | `pinned` | Header 已折叠到最小高度 | TabBar 吸顶，child 正常纵向滚动 | child 回到顶部并继续向下拉 | `[REQ-5.3]` `[REQ-5.8]` |
 | `expanding` | child 已到顶部后继续向下拉 | Header 跟随手指展开 | Header 到最大高度 | `[REQ-5.1]` `[REQ-10]` |
-| `pullingToRefresh` | Header 完全展开且 child 在顶部后继续下拉 | 刷新控件进入准备状态 | 松手超过阈值或回弹取消 | `[REQ-5.6]` |
+| `pullingToRefresh` | Header 完全展开且 child 在顶部后继续下拉 | 系统 `UIRefreshControl` spinner 在当前 child 顶部显示 | 松手超过阈值或回弹取消 | `[REQ-5.6]` |
 | `refreshing` | 超过阈值并释放 | 当前刷新 owner 进入刷新中 | `endRefreshing` 或 child 自行结束 | `[REQ-5.6]` `[REQ-10]` |
 | `pagingInteractive` | 用户横向拖拽 PageContainer | 页面、Tab selected progress、指示器连续联动 | 拖拽提交或取消 | `[REQ-5.7]` |
 | `pagingProgrammatic` | 点击 Tab 或调用 `selectPage` | 页面横向动画切换，指示器同步移动 | 动画完成或被新目标中断 | `[REQ-5.7]` |
@@ -179,7 +179,7 @@ collapseProgress = clamp(
 - 手势驱动的 Header 折叠、展开和横向分页不使用固定 duration，直接跟随手指位移。
 - 程序化切换使用短时、可中断动画，优先响应最新用户意图。
 - 布局刷新默认不制造戏剧化动效，重点是保持视觉位置稳定。
-- 刷新动效使用系统 `UIRefreshControl` 语义或业务 child 自己的 refresh control，不额外创造第二套刷新视觉。
+- 刷新动效使用系统 `UIRefreshControl` 语义或业务 child 自己的 refresh control。默认只显示系统 spinner，不额外创造第二套刷新视觉，也不提供默认刷新文案。
 
 ### 7.2 默认动效参数
 
@@ -230,7 +230,7 @@ collapseProgress = clamp(
 
 刷新触发的前置条件是：Header 完全展开、当前 child 在顶部、没有已有 refresh owner、当前配置允许刷新。`.overall` 模式触发 pager owner；`.child` 模式仅当当前 child 支持 `CollapsiblePagerRefreshableChild` 时触发 child owner。`[REQ-5.6]` `[REQ-10]`
 
-Header 未完全展开时的下拉动作只展开 Header，不触发刷新。短内容和空内容 child 仍需允许 bounce 到刷新阈值。`[REQ-5.6]` `[REQ-6]`
+默认刷新视觉应贴近 UIKit 系统行为：`UIRefreshControl` 属于当前参与滚动协调的 scroll view，可见位置在 TabBar 下方、child 内容上方；组件不提供自定义刷新文案。Header 未完全展开时的下拉动作只展开 Header，不触发刷新。短内容和空内容 child 仍需允许 bounce 到刷新阈值。`[REQ-5.6]` `[REQ-6]`
 
 ### 8.5 Header 布局刷新
 
@@ -309,6 +309,14 @@ component CollapsiblePager {
     ownership = tabBar
     selectionLogic = none
     frameSource = tabItemFrame + widthMode
+  }
+
+  visual refreshControl {
+    defaultImplementation = UIRefreshControl
+    owner = currentChildScrollView
+    position = belowTabBarAboveChildContent
+    defaultText = none
+    triggerAllowedOnlyWhen = header.fullyExpanded && childScrollView.isAtTop
   }
 
   state expanded {
@@ -395,6 +403,9 @@ interaction pullToRefresh {
   guard header.visibleHeight == header.maxHeight
   guard childScrollView.isAtTop == true
   guard refreshOwner == none
+
+  present UIRefreshControl.spinner at childScrollView.top
+  set customRefreshLabel = none
 
   if refreshMode == overall {
     set refreshOwner = pager
