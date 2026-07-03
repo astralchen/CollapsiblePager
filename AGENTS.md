@@ -38,6 +38,13 @@
 - 如果代码与文档冲突，先确认用户意图；除非用户明确要求，否则优先让代码回到文档描述的第一版范围。
 - 不要把后续阶段能力提前塞进第一版实现。后续阶段包括但不限于可横向滚动 TabBar、自定义指示器、Header 下拉拉伸、Header 布局刷新动画、自定义 Header 高度 provider、自定义 TabBar layout provider。
 
+## Architecture References
+
+- Nested scrolling、悬浮吸顶、Header 挂载迁移、整体/局部刷新和手势冲突处理参考 [SPStore/NestedPageViewController](https://github.com/SPStore/NestedPageViewController)，已阅读版本 `94cc01a`。
+- Tab 点击切换、横向滑动切页、Tab selected progress、indicator focus rect 和状态提交链路参考 [uias/Tabman](https://github.com/uias/Tabman)，已阅读版本 `b666020`。
+- 参考项目只提供架构启发，不作为运行时依赖；不要直接复制第三方 public API、命名或内部结构。
+- 真正落地到本项目的设计结论必须写回 `docs/requirements-and-architecture.md` 和 `docs/ui-design-and-animation-dsl.md`，并保持第一版范围一致。
+
 ## Architecture Rules
 
 - `CollapsiblePagerViewController` 是公开容器，负责编排 data source、delegate、child view controller 和内部协调器。
