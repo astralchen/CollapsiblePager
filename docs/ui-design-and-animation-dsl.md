@@ -79,7 +79,7 @@ CollapsiblePagerViewController
 
 ### 4.1 HeaderSlot
 
-HeaderSlot 是业务 Header 的容器，只管理尺寸、可见高度、折叠进度和布局刷新。默认实现不向 Header 内部注入业务 UI。业务 Header 可以根据 `collapseProgress` 自行改变头像、标题、按钮、背景图等视觉状态。`[REQ-5.1]` `[REQ-9]`
+HeaderSlot 是业务 Header 的容器，只管理尺寸、可见高度、折叠进度和布局刷新。默认实现不向 Header 内部注入业务 UI。业务 Header 可以是 `UIView` 或 `UIViewController`；当业务提供 controller 时，pager 负责标准 child containment，HeaderSlot 和 fixed overlay 之间只迁移 controller 的 `view`。业务 Header 可以根据 `collapseProgress` 自行改变头像、标题、按钮、背景图等视觉状态。`[REQ-5.1]` `[REQ-9]`
 
 第一版默认 Header 高度为 `maxHeight = 260`、`minHeight = 0`。当 Header 完全折叠时，HeaderSlot 不保留额外视觉占位；TabBar 进入吸顶位置。`[REQ-14]`
 
@@ -265,12 +265,13 @@ component CollapsiblePager {
   minimumOS iOS(13)
   concurrency mainActorForUIKit
 
-  slot header accepts UIView fromDataSource
+  slot header accepts UIView | UIViewController fromDataSource
   slot tabBar owns TabBarSurface
   slot pages accepts UIViewController[] fromDataSource
 
   token header.maxHeight = 260pt
   token header.minHeight = 0pt
+  token header.heightMode = fixed | automatic(estimatedMax?) | custom(estimated?)
   token tabBar.height = 48pt
   token tabBar.background = UIColor.systemBackground
   token tabBar.separator.visible = true
@@ -504,12 +505,18 @@ interaction reloadHeaderLayout {
   compute childInsets for all loadedChildren
   compute offsetCorrection using offsetPolicy
 
+  if pager.isDragging || pager.isDecelerating || pager.isPagingHorizontally || refreshOwner != none {
+    mark headerLayoutDirty = true
+    wait until pager.isIdle
+    set behavior = immediate
+  }
+
   if behavior == immediate {
     apply layout withoutAnimation
   }
 
-  if behavior == animated(duration) {
-    animate layout duration(duration) curve(easeInOut) interrupt(updateToLatestLayout)
+  if behavior == animated(duration, curve) {
+    animate layout duration(duration) curve(curve) interrupt(updateToLatestLayout)
   }
 
   preserve visualPosition by default
@@ -521,6 +528,8 @@ interaction reloadHeaderLayout {
 
 第一版 UI 交付应覆盖：
 
+- Header slot 接受业务 `UIView` 或 `UIViewController`。
+- `fixed` 和 `automatic` Header 高度模式，automatic 支持首屏估算高度。
 - `belowHeader` 默认布局。
 - 导航栏下方或安全区顶部吸顶。
 - 等宽文本 TabBar。
@@ -561,6 +570,7 @@ interaction reloadHeaderLayout {
 - 自定义指示器 DSL：形状、渐变、跟随方式、尺寸来源。
 - 可横向滚动 TabBar。
 - Header 下拉拉伸动效。
+- Header 布局刷新动画。
 - example app 的个人主页 Header 参考实现。
 
 这些扩展均对应技术架构文档中的第二阶段和后续阶段范围。`[REQ-12]`
