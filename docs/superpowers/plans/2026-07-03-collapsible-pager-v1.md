@@ -4,7 +4,7 @@
 
 **Goal:** 从干净占位模块重写 V1 通用 UIKit `CollapsiblePager`，交付可折叠 Header、默认 TabBar、横向分页、纵向嵌套滚动、刷新 handoff 和示例验收链路。
 
-**Architecture:** V1 采用“Nested 纵向内核 + Tabman 横向状态链路”的组合设计。纵向状态以 `PinAnchor` 为真相，横向状态以 `PagePosition` 为真相，TabBar 只渲染和发请求，刷新只做外部 handoff。
+**Architecture:** V1 采用“Nested 纵向内核 + Tabman 横向状态链路 + UIPageViewController 式 source/target programmatic 转场语义”的组合设计。纵向状态以 `PinAnchor` 为真相，横向状态以 `PagePosition` 为真相，TabBar 只渲染和发请求，刷新只做外部 handoff。PageContainer 与 TabBar 工作区域从 safe area top / navigation bar bottom 到屏幕底部；Header 默认在安全区内展示，也可配置延伸到顶部安全区外。
 
 **Tech Stack:** Swift 6.2、UIKit、Swift Testing、XCTest UI Tests、iOS 13、内部 `UIScrollView` paging 容器。
 
@@ -12,12 +12,25 @@
 
 ## 当前基线
 
-旧源码骨架已经删除。当前核心 target 只保留：
+本计划最初基于干净占位模块编写：
 
 - `Sources/CollapsiblePager/CollapsiblePager.swift`
 - `Tests/CollapsiblePagerTests/CollapsiblePagerTests.swift`
 
-执行本计划时，从这个干净基线开始实现。不要恢复旧的 `Public/`、`Header/`、`Layout/` 代码；需要按本计划重新创建。
+如果从干净基线执行本计划，应按任务顺序重新创建 V1 源码。若从当前工作区继续开发，已有 `Public/`、`Header/`、`Layout/`、`Paging/`、`TabBar/` 等 V1 文件是计划执行产物，不要删除或回滚；新增调整应在现有实现上小步补齐。
+
+## 架构调整回填清单
+
+以下结论覆盖本计划早期草稿中较旧的描述：
+
+- PageContainer frame 不再铺满 pager bounds，而是采用 NestedPageViewController 式 content viewport：顶部为 TabBar pin 位置，也就是导航栏底部或无导航栏时的 safe area top，底部到 pager bounds 底部。
+- Header 顶部行为由 `CollapsiblePagerHeaderTopBehavior` 决定。默认 `.insideSafeArea`；`.extendsUnderTopSafeArea` 只扩展 Header 视觉 frame，TabBar 和 child rows 仍保留在安全区域内。
+- Page controller 必须手动转发 child appearance lifecycle。自研 `UIScrollView` paging 不能依赖 UIKit 自动推断 `viewWillAppear` / `viewDidDisappear`。
+- 横向 child UI 层级使用 bounded window，V1 默认只保留当前页和相邻页；完成切页后卸载远离当前页的 child controller 和 page view。
+- 非相邻 Tab/API 跳转采用 `UIPageViewController.setViewControllers` 式 source/target 语义，不通过连续 `contentOffset` 滚过中间页；相邻页动画仍使用 paging scroll 动画。
+- 短内容和空内容 child 需要 bottom inset 补偿，并观察 `contentSize` 变化，确保 Short/Empty 页也能向上滚到吸顶阈值。
+- TabBar 内部采用 scroll-ready 层级：`TabBarView -> ContentScrollView -> ItemLayoutView -> Item + IndicatorContainer`。V1 默认等宽且不公开横向滚动能力，但层级要为后续可滚动 TabBar 保持正确。
+- Examples 使用纯代码入口，不使用 `ViewController.swift` 作为主控制器，不使用 xib；`SceneDelegate` 直接挂载 demo pager。
 
 ## 验证命令
 
@@ -84,6 +97,8 @@ xcrun simctl list devices available
   child scroll view 顶部 inset 区域的挂载点。
 - `Sources/CollapsiblePager/Header/CollapsiblePagerFixedHeaderContainer.swift`
   吸顶、横向切页、回弹、刷新 reveal/end 和布局刷新使用的 fixed overlay。
+- `Sources/CollapsiblePager/Header/CollapsiblePagerPinnedSurfaceView.swift`
+  覆盖在 PageContainer 上方的 Header/TabBar 视觉层，负责 fixed overlay 坐标系。
 
 ### Children
 
@@ -103,6 +118,10 @@ xcrun simctl list devices available
 
 - `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabBarView.swift`
   默认等宽文本 TabBar。
+- `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabBarContentView.swift`
+  scroll-ready Tab 内容层级和等宽 item 布局。
+- `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabBarIndicatorContainerView.swift`
+  indicator 坐标容器。
 - `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabItemView.swift`
   Tab button、selected progress 和 accessibility。
 - `Sources/CollapsiblePager/TabBar/CollapsiblePagerIndicatorFocusRect.swift`
@@ -114,6 +133,8 @@ xcrun simctl list devices available
 
 - `Sources/CollapsiblePager/Scroll/CollapsiblePagerVerticalScrollCoordinator.swift`
   纵向嵌套滚动、pin anchor、guarded offset、非当前 child 同步。
+- `Sources/CollapsiblePager/Scroll/CollapsiblePagerScrollObservation.swift`
+  KVO 观察 child `contentOffset` 和 `contentSize`，触发滚动协调与短内容 inset 重算。
 - `Sources/CollapsiblePager/Refresh/CollapsiblePagerRefreshHandoffCoordinator.swift`
   刷新资格、同手势互斥和 handoff 记录。
 - `Sources/CollapsiblePager/Gesture/CollapsiblePagerGestureArbiter.swift`
@@ -131,6 +152,9 @@ xcrun simctl list devices available
 - `Tests/CollapsiblePagerTests/HeaderContainmentTests.swift`
 - `Tests/CollapsiblePagerTests/ChildStoreTests.swift`
 - `Tests/CollapsiblePagerTests/VerticalScrollCoordinatorTests.swift`
+- `Tests/CollapsiblePagerTests/GestureArbiterTests.swift`
+- `Tests/CollapsiblePagerTests/TabBarViewTests.swift`
+- `Tests/CollapsiblePagerTests/ContainerIntegrationTests.swift`
 
 ## Task 1: 公开 API 合约
 
@@ -149,6 +173,7 @@ xcrun simctl list devices available
 - 所有 UIKit 入口为 `@MainActor`。
 - `selectedIndex` 默认等于 `0`。
 - 没有页面时 `effectiveSelectedIndex == nil`。
+- 默认 Header 顶部行为为 `.insideSafeArea`。
 - 不存在专门的刷新 child 协议。
 - 不存在刷新触发 delegate。
 - 不要求 `UIRefreshControl`。
@@ -182,9 +207,10 @@ import UIKit
     #expect(configuration.tabBar.height == 48)
     #expect(configuration.tabBar.placement == .belowHeader)
     #expect(configuration.tabBar.pinning == .pinBelowNavigationBar(offset: 0))
+    #expect(configuration.header.topBehavior == .insideSafeArea)
     #expect(configuration.refreshMode == .none)
     #expect(configuration.paging.allowsSwipeToChangePage)
-    #expect(configuration.paging.bouncesHorizontally == false)
+    #expect(configuration.paging.bouncesHorizontally)
 }
 
 @MainActor
@@ -230,10 +256,11 @@ Expected: Public API 测试通过。
 **Acceptance:**
 
 - Layout engine 不持有 UIKit 对象。
-- PageContainer frame 等于 pager bounds。
+- PageContainer frame 顶部等于 TabBar pin 位置，底部到 pager bounds 底部。
 - child top inset 等于 Header max height + TabBar height。
 - pin threshold 等于 Header collapse range。
 - 空 Header range 时 progress 稳定为 `1`。
+- Header 默认在安全区内；`.extendsUnderTopSafeArea` 只改变 Header frame 顶部，不改变 PageContainer、TabBar 或 child inset。
 
 - [ ] **Step 1: 写布局失败测试**
 
@@ -256,11 +283,12 @@ import Testing
 
     let output = CollapsiblePagerLayoutEngine().layout(input)
 
-    #expect(output.pageContainerFrame == input.containerBounds)
+    #expect(output.pageContainerFrame == CGRect(x: 0, y: 91, width: 390, height: 753))
+    #expect(output.headerFrame == CGRect(x: 0, y: 91, width: 390, height: 260))
     #expect(output.headerVisibleHeight == 260)
     #expect(output.collapseProgress == 0)
     #expect(output.childContentInset.top == 308)
-    #expect(output.tabBarFrame.minY == 260)
+    #expect(output.tabBarFrame.minY == 351)
 }
 
 @Test func pinnedLayoutKeepsTabBarAtPinY() {
@@ -272,6 +300,18 @@ import Testing
     #expect(output.headerVisibleHeight == 0)
     #expect(output.collapseProgress == 1)
     #expect(output.tabBarFrame.minY == 91)
+}
+
+@Test func headerCanExtendUnderTopSafeAreaWithoutMovingTabBarOrRows() {
+    var input = CollapsiblePagerLayoutInput.defaultTestValue
+    input.headerTopBehavior = .extendsUnderTopSafeArea
+
+    let output = CollapsiblePagerLayoutEngine().layout(input)
+
+    #expect(output.pageContainerFrame == CGRect(x: 0, y: 91, width: 390, height: 753))
+    #expect(output.headerFrame == CGRect(x: 0, y: 0, width: 390, height: 351))
+    #expect(output.tabBarFrame == CGRect(x: 0, y: 351, width: 390, height: 48))
+    #expect(output.childContentInset.top == 308)
 }
 ```
 
@@ -368,6 +408,7 @@ Expected: PagePositionTests 和 IndicatorFocusRectTests 通过。
 - Create: `Sources/CollapsiblePager/Header/CollapsiblePagerHeaderHostCoordinator.swift`
 - Create: `Sources/CollapsiblePager/Header/CollapsiblePagerHeaderMountView.swift`
 - Create: `Sources/CollapsiblePager/Header/CollapsiblePagerFixedHeaderContainer.swift`
+- Create: `Sources/CollapsiblePager/Header/CollapsiblePagerPinnedSurfaceView.swift`
 - Test: `Tests/CollapsiblePagerTests/HeaderContainmentTests.swift`
 
 **Acceptance:**
@@ -376,6 +417,7 @@ Expected: PagePositionTests 和 IndicatorFocusRectTests 通过。
 - Header controller parent 始终是 pager。
 - host 在 mount/fixed overlay 间迁移不重复 add/remove child。
 - 替换 Header 时正确移除旧 controller。
+- fixed overlay 挂在 pinned surface 中，吸顶、横向切页和刷新 reveal 使用同一坐标系。
 
 - [ ] **Step 1: 写 containment 测试**
 
@@ -431,6 +473,8 @@ Expected: HeaderContainmentTests 通过。
 - 对 child scroll view 关闭 automatic adjustment。
 - 应用 managed top inset 和 scroll indicator inset。
 - 每个 child 有独立 HeaderMountView。
+- 按 child bounds、contentSize、managed top inset 和 pin threshold 计算 bottom inset 补偿。
+- 创建 child record 时按当前 pin anchor 校准初始 `contentOffset`。
 
 - [ ] **Step 1: 写 child store 测试**
 
@@ -458,7 +502,30 @@ import UIKit
 
     #expect(record.viewController === child)
     #expect(record.scrollView.contentInset.top == 308)
+    #expect(record.scrollView.verticalScrollIndicatorInsets.top == 308)
+    #expect(record.scrollView.contentInsetAdjustmentBehavior == .never)
     #expect(record.mountView.superview === child.scrollView)
+}
+
+@MainActor
+@Test func childStoreAddsBottomInsetForShortContentToReachPinThreshold() throws {
+    let pager = CollapsiblePagerViewController()
+    let store = CollapsiblePagerChildStore(owner: pager)
+    let child = ScrollChild()
+    child.scrollView.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+    child.scrollView.contentSize = CGSize(width: 390, height: 80)
+
+    let record = try #require(store.makeRecord(
+        for: child,
+        index: 0,
+        managedTopInset: 308,
+        managedBottomInset: 34,
+        pinThreshold: 260
+    ))
+
+    let pinnedOffsetY = -48.0
+    let maxScrollableOffsetY = record.scrollView.contentSize.height + record.scrollView.contentInset.bottom - record.scrollView.bounds.height
+    #expect(maxScrollableOffsetY >= pinnedOffsetY)
 }
 
 @MainActor
@@ -470,11 +537,11 @@ private final class ScrollChild: UIViewController, CollapsiblePagerScrollProvidi
 
 - [ ] **Step 2: 实现 ChildRecord**
 
-记录 `index`、`viewController`、`scrollView`、`mountView`、`lastKnownContentOffsetY`。
+记录 `index`、`viewController`、`scrollView`、`mountView`、`baseContentInset`、`baseScrollIndicatorInsets`、`lastKnownContentOffsetY`。
 
 - [ ] **Step 3: 实现 ChildStore**
 
-`makeRecord` 做 provider 校验和 inset 应用。`attach`/`detach` 使用 `addChild`、`didMove`、`willMove`、`removeFromParent`。
+`makeRecord` 做 provider 校验、top/bottom inset 应用和初始 offset 校准。`attach`/`detach` 使用 `addChild`、`didMove`、`willMove`、`removeFromParent`。`updateManagedInset` 要在 `contentSize` 或 layout 变化后重算短内容 bottom inset。
 
 - [ ] **Step 4: 运行测试**
 
@@ -495,6 +562,7 @@ Expected: ChildStoreTests 通过。
 - cancel 回滚到来源 index。
 - 空页和越界请求 no-op。
 - 快速连续请求合并到最后目标。
+- PageContainer 支持按 index 创建、移除 page view，并暴露已加载 page index 供容器裁剪窗口。
 
 - [ ] **Step 1: 写 pipeline 测试**
 
@@ -506,7 +574,7 @@ import Testing
     var state = CollapsiblePagerState.initial(pageCount: 3)
     let pipeline = PageRequestPipeline()
 
-    let accepted = pipeline.request(.init(source: .tabTap, fromIndex: 0, targetIndex: 2, animated: true), state: &state)
+    let accepted = pipeline.request(.init(source: .api, fromIndex: 0, targetIndex: 2, animated: true), state: &state)
 
     #expect(accepted)
     #expect(state.selectedIndex == 0)
@@ -538,7 +606,7 @@ import Testing
 
 - [ ] **Step 3: 实现 PageContainer skeleton**
 
-先完成 scroll view 初始化、paging 配置、delegate forwarding、raw position 计算。child 布局和集成在 Task 10。
+先完成 scroll view 初始化、paging 配置、delegate forwarding、raw position 计算、`pageView(at:)`、`removePageView(at:)`、`removeAllPageViews()` 和 `loadedPageIndexes`。child 布局和集成在 Task 10。
 
 - [ ] **Step 4: 运行测试**
 
@@ -549,6 +617,8 @@ Expected: PageRequestPipelineTests 通过。
 **Files:**
 
 - Create: `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabBarView.swift`
+- Create: `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabBarContentView.swift`
+- Create: `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabBarIndicatorContainerView.swift`
 - Create: `Sources/CollapsiblePager/TabBar/CollapsiblePagerTabItemView.swift`
 - Create: `Sources/CollapsiblePager/TabBar/CollapsiblePagerUnderlineIndicatorView.swift`
 - Test: `Tests/CollapsiblePagerTests/TabBarViewTests.swift`
@@ -556,8 +626,11 @@ Expected: PageRequestPipelineTests 通过。
 **Acceptance:**
 
 - TabBar 渲染等宽 item。
+- TabBar 内部使用 content scroll view、item layout view 和 indicator container；V1 默认禁用横向滚动。
 - 点击只发 request callback。
+- Tab item 必须注册 `.touchUpInside` target/action，真实触摸和程序化 `sendActions` 都能发出选择请求。
 - selected progress 更新 item 样式和 accessibility。
+- selected progress 字体变化后 item 需要 relayout，避免标题被截断。
 - indicator 使用 focus rect。
 - 空页时没有 item 和 indicator。
 
@@ -567,6 +640,30 @@ Expected: PageRequestPipelineTests 通过。
 import Testing
 import UIKit
 @testable import CollapsiblePager
+
+@MainActor
+@Test func tabItemRegistersTouchUpInsideTargetForRealTouches() throws {
+    let itemView = CollapsiblePagerTabItemView(title: "Long")
+
+    let actions = try #require(itemView.actions(forTarget: itemView, forControlEvent: .touchUpInside))
+
+    #expect(actions.isEmpty == false)
+}
+
+@MainActor
+@Test func tabBarUsesScrollReadyContentAndIndicatorContainers() throws {
+    let tabBar = CollapsiblePagerTabBarView()
+    tabBar.frame = CGRect(x: 0, y: 0, width: 300, height: 48)
+
+    tabBar.reloadTitles(["A", "B", "C"])
+    tabBar.update(position: PagePosition.make(rawPosition: 1, pageCount: 3, isInteractive: false))
+    tabBar.layoutIfNeeded()
+
+    #expect(tabBar.contentScrollViewForTesting.superview === tabBar.contentViewForTesting)
+    #expect(tabBar.contentScrollViewForTesting.isScrollEnabled == false)
+    #expect(tabBar.itemLayoutViewForTesting.superview === tabBar.contentScrollViewForTesting)
+    #expect(tabBar.indicatorContainerViewForTesting.superview === tabBar.itemLayoutViewForTesting)
+}
 
 @MainActor
 @Test func tabBarTapOnlyEmitsRequest() {
@@ -598,7 +695,7 @@ import UIKit
 
 - [ ] **Step 3: 实现 TabBar view**
 
-使用 `UIStackView` 或手动等宽布局。V1 不实现横向滚动。
+使用 scroll-ready content hierarchy 手动布局等宽 item。V1 不公开横向滚动能力，`contentScrollView.isScrollEnabled = false`，但 indicator 和 item 都放在同一个 content 坐标系中。
 
 - [ ] **Step 4: 运行测试**
 
@@ -610,6 +707,7 @@ Expected: TabBarViewTests 通过。
 
 - Create: `Sources/CollapsiblePager/State/CollapsiblePagerPinAnchor.swift`
 - Create: `Sources/CollapsiblePager/Scroll/CollapsiblePagerVerticalScrollCoordinator.swift`
+- Create: `Sources/CollapsiblePager/Scroll/CollapsiblePagerScrollObservation.swift`
 - Test: `Tests/CollapsiblePagerTests/PinAnchorTests.swift`
 - Test: `Tests/CollapsiblePagerTests/VerticalScrollCoordinatorTests.swift`
 
@@ -620,6 +718,7 @@ Expected: TabBarViewTests 通过。
 - 主动 setContentOffset 使用 guarded update。
 - 非当前 child 只按 pin delta 同步。
 - 顶部回弹和完全吸顶不传播错误 offset。
+- 观察 child `contentSize` 变化并通知容器重算 managed inset。
 
 - [ ] **Step 1: 写 PinAnchor 测试**
 
@@ -660,7 +759,11 @@ import Testing
 
 观察 current child scroll view，检查 phase，调用 model，应用 guarded offset。
 
-- [ ] **Step 5: 运行测试**
+- [ ] **Step 5: 实现 scroll observation**
+
+用 KVO 观察 `contentOffset` 和 `contentSize`。`contentOffset` 进入纵向 coordinator；`contentSize` 回调给容器，由容器调用 ChildStore 重新计算短内容 bottom inset。
+
+- [ ] **Step 6: 运行测试**
 
 Expected: PinAnchorTests 和 VerticalScrollCoordinatorTests 通过。
 
@@ -735,6 +838,11 @@ Expected: RefreshHandoffTests 和 GestureArbiterTests 通过。
 - page count 变小时 clamp effective selection。
 - `selectPage` 进入 request pipeline。
 - page completion 后 delegate 通知一次。
+- 容器手动转发 child appearance lifecycle。
+- 横向 child window 默认只保留当前页和相邻页。
+- 相邻 animated selection 等 PageContainer 完成后提交。
+- 非相邻 animated selection 采用 direct source/target 转场，立即提交并裁剪 child window。
+- TabBar item 点击使用 `.tabTap` 请求；相邻页保留横向 scroll 动画且 child controller appearance lifecycle 以 `animated = true` 转发，非相邻页立即 source/target 定位且 child controller appearance lifecycle 以 `animated = false` 转发。
 
 - [ ] **Step 1: 写容器集成测试**
 
@@ -756,7 +864,20 @@ import UIKit
 }
 
 @MainActor
-@Test func selectPageCommitsAfterPageContainerCompletes() {
+@Test func reloadDataLoadsCurrentAndAdjacentInitialWindow() {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    pager.dataSource = dataSource
+
+    pager.reloadData()
+
+    #expect(pager.loadedChildIndexesForTesting == [0, 1])
+    #expect(pager.pageContainerLoadedPageIndexesForTesting == [0, 1])
+    #expect(pager.effectiveSelectedIndex == 0)
+}
+
+@MainActor
+@Test func adjacentAnimatedSelectionCommitsAfterPageContainerCompletes() {
     let pager = CollapsiblePagerViewController()
     let dataSource = DemoDataSource(pageCount: 3)
     let delegate = SelectionRecorder()
@@ -764,27 +885,207 @@ import UIKit
     pager.delegate = delegate
     pager.reloadData()
 
-    pager.selectPage(at: 2, animated: true)
+    pager.selectPage(at: 1, animated: true)
     #expect(pager.selectedIndex == 0)
 
-    pager.completePendingPageTransitionForTesting(targetIndex: 2)
+    pager.completePendingPageTransitionForTesting(targetIndex: 1)
 
-    #expect(pager.selectedIndex == 2)
-    #expect(delegate.selectedIndexes == [2])
+    #expect(pager.selectedIndex == 1)
+    #expect(delegate.selectedIndexes == [1])
+}
+
+@MainActor
+@Test func nonAdjacentAnimatedSelectionUsesDirectSourceTargetTransition() {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 20)
+    let delegate = SelectionRecorder()
+    pager.dataSource = dataSource
+    pager.delegate = delegate
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+    pager.selectPage(at: 19, animated: false)
+
+    #expect(pager.loadedChildIndexesForTesting == [18, 19])
+
+    pager.selectPage(at: 0, animated: true)
+
+    #expect(pager.selectedIndex == 0)
+    #expect(pager.effectiveSelectedIndex == 0)
+    #expect(pager.loadedChildIndexesForTesting == [0, 1])
+    #expect(pager.pageContainerLoadedPageIndexesForTesting == [0, 1])
+    #expect(delegate.selectedIndexes == [19, 0])
+}
+
+@MainActor
+@Test func pageTransitionForwardsChildAppearanceLifecycleWhenVisible() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = LifecycleDataSource(pageCount: 2)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.beginAppearanceTransition(true, animated: false)
+    pager.endAppearanceTransition()
+
+    let firstChild = try #require(dataSource.child(at: 0))
+    #expect(firstChild.events == ["willAppear", "didAppear"])
+
+    pager.selectPage(at: 1, animated: false)
+
+    let secondChild = try #require(dataSource.child(at: 1))
+    #expect(firstChild.events == ["willAppear", "didAppear", "willDisappear", "didDisappear"])
+    #expect(secondChild.events == ["willAppear", "didAppear"])
+}
+
+@MainActor
+@Test func adjacentTabBarSelectionAnimatesScrollAndControllerTransition() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = LifecycleDataSource(pageCount: 2)
+    let delegate = SelectionRecorder()
+    pager.dataSource = dataSource
+    pager.delegate = delegate
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+    pager.beginAppearanceTransition(true, animated: false)
+    pager.endAppearanceTransition()
+
+    pager.tapTabItemForTesting(at: 1)
+
+    let firstChild = try #require(dataSource.child(at: 0))
+    let secondChild = try #require(dataSource.child(at: 1))
+    #expect(pager.selectedIndex == 0)
+    #expect(pager.effectiveSelectedIndex == 0)
+    #expect(delegate.selectedIndexes.isEmpty)
+    #expect(firstChild.animatedEvents.suffix(1) == ["willDisappear:true"])
+    #expect(secondChild.animatedEvents == ["willAppear:true"])
+
+    pager.completePendingPageTransitionForTesting(targetIndex: 1)
+
+    #expect(pager.selectedIndex == 1)
+    #expect(pager.effectiveSelectedIndex == 1)
+    #expect(delegate.selectedIndexes == [1])
+    #expect(firstChild.animatedEvents.suffix(2) == ["willDisappear:true", "didDisappear:true"])
+    #expect(secondChild.animatedEvents == ["willAppear:true", "didAppear:true"])
+}
+
+@MainActor
+@Test func tabBarSelectionToEmptyPageKeepsPinnedHeaderState() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let longScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    longScrollView.contentSize = CGSize(width: 390, height: 1200)
+    longScrollView.setContentOffset(CGPoint(x: 0, y: -48), animated: false)
+    pager.view.layoutIfNeeded()
+
+    pager.tapTabItemForTesting(at: 2)
+    pager.view.layoutIfNeeded()
+
+    let emptyScrollView = try #require(pager.childScrollViewForTesting(at: 2))
+    #expect(pager.collapseProgressForTesting == 1)
+    #expect(pager.tabBarFrameForTesting.minY == 0)
+    #expect(emptyScrollView.contentOffset.y == -48)
+}
+
+@MainActor
+@Test func tabBarSelectionBackToScrolledLongPagePreservesChildOffset() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let longScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let preservedOffsetY: CGFloat = 520
+    longScrollView.contentSize = CGSize(width: 390, height: 2000)
+    longScrollView.setContentOffset(CGPoint(x: 0, y: preservedOffsetY), animated: false)
+    pager.view.layoutIfNeeded()
+
+    pager.tapTabItemForTesting(at: 1)
+    pager.view.layoutIfNeeded()
+    pager.tapTabItemForTesting(at: 0)
+    pager.view.layoutIfNeeded()
+
+    let returnedLongScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    #expect(returnedLongScrollView.contentOffset.y == preservedOffsetY)
+}
+
+@MainActor
+@Test func tabBarSelectionBackFromEmptyRestoresUnloadedLongChildOffset() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let longScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let preservedOffsetY: CGFloat = 520
+    longScrollView.contentSize = CGSize(width: 390, height: 2000)
+    longScrollView.setContentOffset(CGPoint(x: 0, y: preservedOffsetY), animated: false)
+    pager.view.layoutIfNeeded()
+
+    pager.tapTabItemForTesting(at: 2)
+    pager.view.layoutIfNeeded()
+    #expect(pager.loadedChildIndexesForTesting == [1, 2])
+
+    pager.tapTabItemForTesting(at: 0)
+    pager.view.layoutIfNeeded()
+
+    let returnedLongScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    returnedLongScrollView.contentSize = CGSize(width: 390, height: 2000)
+    pager.view.layoutIfNeeded()
+    #expect(returnedLongScrollView.contentOffset.y == preservedOffsetY)
+}
+
+@MainActor
+@Test func horizontalPagingSuppressesChildScrollIndicatorsUntilStable() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let longScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let shortScrollView = try #require(pager.childScrollViewForTesting(at: 1))
+    let interactivePosition = try #require(PagePosition.make(rawPosition: 0.5, pageCount: 3, isInteractive: true))
+    pager.updatePagePositionForTesting(interactivePosition)
+
+    #expect(longScrollView.showsVerticalScrollIndicator == false)
+    #expect(shortScrollView.showsVerticalScrollIndicator == false)
+
+    let stablePosition = try #require(PagePosition.make(rawPosition: 0, pageCount: 3, isInteractive: false))
+    pager.updatePagePositionForTesting(stablePosition)
+    #expect(longScrollView.showsVerticalScrollIndicator)
+    #expect(shortScrollView.showsVerticalScrollIndicator)
 }
 ```
 
 - [ ] **Step 2: 实现 test fixtures**
 
-`DemoDataSource` 返回 `UIView()` Header 和遵守 `CollapsiblePagerScrollProviding` 的 child。
+`DemoDataSource` 返回 `UIView()` Header 和遵守 `CollapsiblePagerScrollProviding` 的 child。`LifecycleDataSource` 返回记录 `viewWillAppear`、`viewDidAppear`、`viewWillDisappear`、`viewDidDisappear` 的 child，用于验证容器手动 lifecycle 转发。
 
 - [ ] **Step 3: 集成 reloadData**
 
-顺序：读取 count、更新 state、刷新 Header、刷新 TabBar、加载有效 child、应用 layout。
+顺序：读取 count、更新 state、刷新 Header、刷新 TabBar、加载有效 child、应用 layout，然后按当前 effective selection 加载当前页和相邻页窗口。
 
 - [ ] **Step 4: 集成 selectPage**
 
-调用 PageRequestPipeline；PageContainer 完成后提交并通知 delegate。
+调用 PageRequestPipeline。TabBar item 点击使用 `.tabTap`，相邻页以 animated page scroll 过渡并在 PageContainer 完成后提交，child controller appearance lifecycle 同步以 `animated: true` 转发；非相邻页直接 source/target 定位并立即完成 request，child controller appearance lifecycle 以 `animated: false` 转发。公开 API 的相邻 animated selection 交给 PageContainer scroll 动画完成后提交；非相邻 programmatic selection 直接 set 到目标页并完成 request，避免滚过未加载的中间页。完成后统一通知 delegate、同步 TabBar、转发 child lifecycle，并按当前页裁剪 child window。新的 current child 需要按当前 `PinAnchor` 和 managed top inset 通过 guarded offset update 补齐不足，确保 Long 已吸顶后点击 Empty/Short 仍保持吸顶；已经滚得更深的 child 必须保留自己的列表位置，避免返回 Long 时跳回 row 1。child window 卸载远离当前页的 controller 前保存 contentOffset snapshot；重新加载时如果内容尺寸暂时不足以恢复，保留 pending offset，并在 `contentSize` KVO 后重算 inset 再恢复。横向 PagePosition 处于交互或过渡 progress 时临时隐藏 loaded child 的 scroll indicators，稳定后恢复业务 child 原始配置。
 
 - [ ] **Step 5: 运行测试**
 
@@ -795,7 +1096,7 @@ Expected: ContainerIntegrationTests 通过。
 **Files:**
 
 - Modify: `Examples/Examples.xcodeproj/project.pbxproj`
-- Modify: `Examples/Examples/ViewController.swift`
+- Modify: `Examples/Examples/SceneDelegate.swift`
 - Create: `Examples/Examples/DemoPagerFactory.swift`
 - Create: `Examples/Examples/DemoHeaderView.swift`
 - Create: `Examples/Examples/DemoListViewController.swift`
@@ -805,27 +1106,32 @@ Expected: ContainerIntegrationTests 通过。
 **Acceptance:**
 
 - 示例 App 使用核心包 public API 接入。
+- 示例 App 使用纯代码装配主界面，不使用 `ViewController.swift` 或 xib。
 - Header 内容是业务外部 demo，不写入核心包。
 - `.overall` 和 `.child` 刷新都由 demo child 自己安装。
 - UI test 覆盖基础展开、切页和空态。
 
-- [ ] **Step 1: 创建 demo factory**
+- [ ] **Step 1: 更新 SceneDelegate 纯代码入口**
+
+`SceneDelegate` 创建 `UIWindow`，使用 `DemoPagerFactory` 生成根 `CollapsiblePagerViewController`，并设置为 root view controller。不要恢复 `ViewController.swift`、Main storyboard 或 xib 主入口。
+
+- [ ] **Step 2: 创建 demo factory**
 
 Factory 提供三种场景：长内容、短内容、空内容。每个 child 都遵守 `CollapsiblePagerScrollProviding`。
 
-- [ ] **Step 2: 创建 demo header**
+- [ ] **Step 3: 创建 demo header**
 
 Header 只展示示例占位文本和高度变化按钮，用于触发 `reloadHeaderLayout`。
 
-- [ ] **Step 3: 创建 demo refresh controller**
+- [ ] **Step 4: 创建 demo refresh controller**
 
 使用系统 `UIRefreshControl` 或自定义 view 都可以，但只存在于 Examples target。核心 target 不引用刷新控件类型。
 
-- [ ] **Step 4: 写 UI test**
+- [ ] **Step 5: 写 UI test**
 
 覆盖 launch、点击 Tab、空态不崩溃、下拉前 Header 先展开。
 
-- [ ] **Step 5: 运行示例构建**
+- [ ] **Step 6: 运行示例构建**
 
 Run:
 

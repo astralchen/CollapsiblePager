@@ -35,8 +35,11 @@ Tabman 的优势是横向分页状态链路和 TabBar 渲染分层。
 - Bar 只负责展示 item、接收点击、发出 scroll request。
 - Page controller 才拥有页面切换过程，输出连续 page position。
 - Tab item selected progress、indicator frame、可滚动 bar 的 focus rect 都消费同一个 position。
-- 点击 Tab、API 跳转和横向滑动都进入同一条页面请求链路。selected index 在完成或取消后统一提交。
+- 点击 Tab、API 跳转和横向滑动都进入同一条页面请求链路。selected index 在完成或取消后统一提交。Tab 点击不触发 UIViewController 转场动画；公开 API 选择和横向手势按调用参数或手势状态决定动画。
 - Indicator focus rect 由 item/title frame 和连续 position 推导，不应散落成 `selectedIndex`、`fromIndex`、`progress` 多套入口。
+- Page controller 负责 child appearance lifecycle。自研 `UIScrollView` paging 不能依赖 UIKit 自动推断页面可见性；横向转场开始和结束时必须统一转发 `beginAppearanceTransition` / `endAppearanceTransition`。
+- Page controller 使用 bounded child window 控制 UI 层级规模。已经访问过但远离当前页的 child 必须从横向滚动层级和 containment 中卸载，V1 默认只保留当前页和相邻页。
+- `UIPageViewController.setViewControllers(_:direction:animated:completion:)` 的可借鉴点是 programmatic 转场只描述 source、target、方向和完成回调。V1 仍使用内部 `UIScrollView` paging，但非相邻跳转必须按 source/target 直接切换，不通过连续 `contentOffset` 滚过中间页面。
 
 这些结论落到本项目后，形成 `PageContainer`、`PageRequestPipeline`、`PagePosition`、`TabBarController` 和 `IndicatorFocusRect`。
 
@@ -49,6 +52,7 @@ Tabman 的优势是横向分页状态链路和 TabBar 渲染分层。
 - TabBar 不修改 child 或纵向状态。
 - Refresh 不修改业务数据，也不要求指定刷新控件。
 - Child 不反向拥有 Header、TabBar 或 selected index。
+- Child 不自行处理横向页面转场 lifecycle；由容器按 page request pipeline 统一转发。
 
 ## 3. V1 目标
 
@@ -175,12 +179,23 @@ public struct CollapsiblePagerConfiguration {
 
 V1 默认值：
 
-- Header：`fixed(max: 260, min: 0)`。
+- Header：`fixed(max: 260, min: 0)`，`topBehavior = .insideSafeArea`。
 - TabBar：`height = 48`，`placement = .belowHeader`。
 - Pinning：`pinBelowNavigationBar(offset: 0)`，没有导航栏时回退到 safe area top。
 - Indicator：短下划线，`height = 3`，`cornerRadius = 1.5`，`width = fixed(28)`。
-- Paging：允许横向滑动，横向不回弹，Tab 点击动画 `0.28s`。
+- Paging：允许横向滑动，横向默认回弹；业务方可通过 `configuration.paging.bouncesHorizontally = false` 关闭。Tab 点击无 UIViewController 转场动画。
 - Refresh：`.none`。
+
+Header 顶部行为：
+
+```swift
+public enum CollapsiblePagerHeaderTopBehavior: Sendable, Equatable {
+    case insideSafeArea
+    case extendsUnderTopSafeArea
+}
+```
+
+`.insideSafeArea` 是默认行为，Header 顶部从导航栏底部或 safe area top 开始。`.extendsUnderTopSafeArea` 只扩展 Header 视觉 frame 到容器顶部；TabBar pin 位置、PageContainer frame 和 child rows 仍保持在安全区域内。
 
 刷新配置：
 
@@ -234,7 +249,9 @@ Root view 不含业务 UI。
 - child content inset
 - layout reload offset correction
 
-PageContainer 的 frame 铺满 pager bounds。Header 与 TabBar 的占位通过 child scroll view 的 managed top inset 表达，避免容器 frame 下移和 inset 双重计算。
+PageContainer 使用 NestedPageViewController 式 content viewport：顶部从 TabBar pin 位置开始，也就是导航栏底部或无导航栏时的 safe area top，底部到 pager bounds 底部。这样 `CollapsiblePagerTabBarView` 与横向 paging 区域都处在 safe area top 到屏幕底部的范围内，child scroll view 不会滚入状态栏/导航栏区域。Header 与 TabBar 的滚动占位仍通过 child scroll view 的 managed top inset 表达；child 初始 offset 按 `pinAnchorY - managedTopInset` 校准，确保首次展示时 Header 在 rows 之前可见。
+
+Header frame 的顶部由 `CollapsiblePagerHeaderTopBehavior` 决定。默认 `.insideSafeArea` 时 Header 顶部与 content viewport 顶部一致；`.extendsUnderTopSafeArea` 时 Header 顶部为 pager bounds 顶部，但 Header 底部仍贴着 TabBar 顶部，TabBar 和 child 布局不随之进入 unsafe 区域。
 
 ### 8.4 HeaderHostCoordinator
 
@@ -254,6 +271,10 @@ PageContainer 的 frame 铺满 pager bounds。Header 与 TabBar 的占位通过 
 - 使用标准 containment。
 - 校验 child 是否遵守 `CollapsiblePagerScrollProviding`。
 - 设置 content inset、scroll indicator inset、contentInsetAdjustmentBehavior。
+- 短内容或空内容 child 按当前 viewport、contentSize、managed top inset 和 pin threshold 计算 bottom inset 补偿，确保真实内容不足一屏时仍可滚到吸顶阈值。
+- 创建时按当前 pin anchor 校准初始 contentOffset。
+- 切页提交后，新的 current child 如果低于当前 pin anchor 所需 offset，必须通过 guarded update 补齐；如果已经滚得更深，保留该 child 自己的列表位置。
+- child window 裁剪卸载 controller 前必须保存该 index 的 contentOffset snapshot。重新加载时如果内容尺寸暂时不足以恢复，offset 恢复保持 pending，并在后续 `contentSize` 变化、managed inset 重算后继续尝试。
 - 为每个 loaded child 创建 HeaderMountView。
 
 ### 8.6 VerticalScrollCoordinator
@@ -302,10 +323,11 @@ struct PageRequest: Sendable {
 1. 校验 page count 和 index。
 2. 空页或越界 no-op。
 3. 建立 pending selection。
-4. 驱动 PageContainer。
+4. 驱动 PageContainer；相邻动画切换使用 paging scroll 动画，非相邻 programmatic 跳转直接设置目标页并完成。
 5. 输出 PagePosition 给 TabBar/indicator。
 6. 完成时提交 `selectedIndex`。
-7. 取消时回滚 pending selection 和 indicator。
+7. 完成后按当前页裁剪 child window，只保留当前页和相邻页。
+8. 取消时回滚 pending selection 和 indicator。
 
 ### 8.9 TabBarController
 
@@ -416,6 +438,8 @@ struct PagePosition: Sendable, Equatable {
 - 目标等于当前 effective selection 时，只校准 Tab/indicator，不重复 delegate。
 - 有效请求进入 PageRequestPipeline。
 - animated 为 false 时也经过同一提交路径，只是 PageContainer 立即定位。
+- 横向 scroll 动画只用于相邻页面切换；非相邻切换采用 direct source/target 立即定位，不滚过中间页。
+- TabBar item 点击内部使用 `.tabTap` 请求；相邻页允许横向 scroll 动画且 child controller appearance transition 使用 `animated = true`，非相邻页直接定位且 child controller appearance transition 使用 `animated = false`。
 
 ### 10.3 Header 布局刷新
 
@@ -433,6 +457,7 @@ public func reloadHeaderLayout(offsetPolicy: CollapsiblePagerHeaderOffsetPolicy 
 
 - Header 迁移到 fixed overlay。
 - VerticalScrollCoordinator 暂停处理当前 child offset 回调。
+- loaded child 的 scroll indicators 临时隐藏，避免页面横向位移时列表滚动条出现在屏幕中间。
 - 如果旧 child 正在非回弹减速，可以终止减速。
 - 如果旧 child 正在顶部回弹，fixed overlay 保持回弹视觉位置。
 
@@ -441,6 +466,9 @@ public func reloadHeaderLayout(offsetPolicy: CollapsiblePagerHeaderOffsetPolicy 
 - 完成则提交目标 selected index。
 - 取消则回滚到来源 selected index。
 - 目标 child 加载并成为 current child。
+- 非相邻 programmatic 跳转不滚过中间页，完成后只保留目标页邻域 child window。
+- 目标 child 按当前 `PinAnchor` 与 managed top inset 做 guarded contentOffset 补齐；Long 已吸顶后点击 Short/Empty 不应瞬间退出吸顶，回到已深度滚动但曾被 child window 卸载的 Long 时也不应重置到 row 1。
+- child scroll indicators 恢复到业务 child 原始配置。
 - Header 根据 pin anchor 恢复到目标 child mount 或 fixed overlay。
 - 顶部回弹旧 child 做 offset 校准。
 

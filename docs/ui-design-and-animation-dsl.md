@@ -21,16 +21,21 @@ CollapsiblePagerViewController
    │  └─ ChildViewController[index].view
    │     └─ pagerScrollView
    │        └─ HeaderMountView[index]
-   ├─ FixedHeaderContainer
-   │  └─ HeaderHostView
-   │     ├─ ProvidedHeaderView
-   │     └─ TabBarSurface
-   │        ├─ TabItem[0...n]
-   │        └─ IndicatorLayer
+   ├─ PinnedSurfaceView
+   │  ├─ FixedHeaderContainer
+   │  │  └─ HeaderHostView
+   │  │     └─ ProvidedHeaderView
+   │  └─ TabBarSurface
+   │     ├─ TabContentScrollView
+   │     │  └─ TabItemLayoutView
+   │     │     ├─ TabItem[0...n]
+   │     │     └─ IndicatorContainer
+   │     │        └─ IndicatorLayer
+   │     └─ Separator
    └─ GestureOverlay / PinAnchor bridge
 ```
 
-普通滚动时，`HeaderHostView` 在当前 child 的 `HeaderMountView` 中。吸顶、横向切页、顶部回弹、刷新 reveal/end 和布局刷新冲突期间，它迁移到 `FixedHeaderContainer`。
+`PageContainerView` 的顶部与 TabBar pin 位置对齐，避免 child 内容滚入状态栏或导航栏区域。`HeaderMountView` 保留 child scroll view 内的滚动占位；吸顶、横向切页、顶部回弹、刷新 reveal/end 和布局刷新冲突期间，`HeaderHostView` 由 `FixedHeaderContainer` 承载。Header 可通过 `topBehavior = .extendsUnderTopSafeArea` 从容器顶部开始绘制，但 TabBar 和 child 内容仍留在安全区域内。
 
 ### 2.2 HeaderHostView
 
@@ -44,6 +49,11 @@ CollapsiblePagerViewController
 
 - `maxHeight = 260pt`
 - `minHeight = 0pt`
+
+默认顶部行为：
+
+- `insideSafeArea`：Header 顶部从导航栏底部或 safe area top 开始。
+- `extendsUnderTopSafeArea`：Header 顶部从容器顶部开始，底部仍贴着 TabBar 顶部。
 
 ### 2.3 TabBarSurface
 
@@ -101,8 +111,14 @@ component CollapsiblePager {
   token indicator.width.default = fixed(28pt)
 
   layout default {
-    pageContainer.frame = pager.bounds
+    pageContainer.frame = rect(
+      x: pager.bounds.minX,
+      y: safeArea.top,
+      width: pager.bounds.width,
+      height: pager.bounds.height - safeArea.top
+    )
     childScrollView.topInset = header.maxHeight + tabBar.height
+    childScrollView.bottomInset >= viewport.height + pinThreshold - childScrollView.topInset - contentSize.height
     headerMount.y = -childScrollView.topInset
     tabBar.placement = belowHeader
     tabBar.pinning = belowNavigationBar(offset: 0pt)
@@ -126,7 +142,8 @@ component CollapsiblePager {
 ```text
 state expanded {
   condition header.visibleHeight == header.maxHeight
-  owner headerHost = currentChild.headerMount
+  owner headerPlaceholder = currentChild.headerMount
+  owner headerHost = fixedOverlay
 }
 
 state collapsing {
@@ -169,6 +186,10 @@ state pagingProgrammatic {
   owner pageTransition = PageRequestPipeline
   owner headerHost = fixedOverlay(reason: horizontalPaging)
   emit PagePosition(raw, fromIndex, toIndex, progress, interactive: false)
+  if abs(toIndex - fromIndex) == 1 and requestAnimated == true then transitionMode = animatedScroll
+  if trigger == tabTap and abs(toIndex - fromIndex) == 1 then controllerTransitionAnimated = true
+  if trigger == tabTap and abs(toIndex - fromIndex) > 1 then controllerTransitionAnimated = false
+  if abs(toIndex - fromIndex) > 1 then transitionMode = directSourceTarget
 }
 
 state pagingCompleted {
@@ -264,6 +285,7 @@ interaction pageRequest {
 
   onProgress emit PagePosition
   onComplete commit selectedIndex = index
+  onComplete prune childWindow to currentIndex ± 1
   onCancel restore selectedIndex = sourceIndex
 }
 ```
@@ -289,6 +311,19 @@ motion indicatorFollowPagePosition {
 
   update indicator.frame = indicatorFrame
   update tabItems.selectionProgress = pagePosition
+}
+
+motion childAppearanceFollowsPageTransition {
+  trigger pageRequest.accepted
+  driver pageContainer
+
+  begin sourceChild.appearance = disappearing
+  begin targetChild.appearance = appearing
+
+  on pageTransition.completed {
+    end sourceChild.appearance
+    end targetChild.appearance
+  }
 }
 ```
 
@@ -357,10 +392,76 @@ assert refreshIsExternal {
 }
 
 assert pageRequestCommitsOnCompletion {
-  when tabTap(target)
+  when selectPage(target, animated: true)
   then pendingSelectedIndex == target
   and selectedIndex remains source until completion
   and onComplete selectedIndex == target
+}
+
+assert adjacentTabTapAnimatesScrollAndControllerTransition {
+  when tabTap(target)
+  and abs(target - source) == 1
+  then selectedIndex remains source until pageContainerCompletion
+  and onComplete selectedIndex == target
+  and controllerTransitionAnimated == true
+  and childAppearanceAnimated == true
+}
+
+assert nonAdjacentTabTapSkipsScrollAnimationAndCommitsImmediately {
+  when tabTap(target)
+  and abs(target - source) > 1
+  then controllerTransitionAnimated == false
+  and selectedIndex == target
+  and childAppearanceAnimated == false
+}
+
+assert tabTapToEmptyPageKeepsPinnedHeader {
+  given selectedPage == Long
+  and collapseProgress == 1
+  when tabTap(Empty)
+  then selectedIndex == Empty
+  and collapseProgress == 1
+  and tabBar.frame.minY == pinY
+  and emptyScrollView.contentOffset.y == pinAnchorY - managedTopInset
+}
+
+assert tabTapBackToLongPreservesDeepChildOffset {
+  given selectedPage == Long
+  and longScrollView.contentOffset.y > pinAnchorY - managedTopInset
+  when tabTap(Short)
+  and tabTap(Long)
+  then selectedIndex == Long
+  and collapseProgress == 1
+  and longScrollView.contentOffset.y == previousLongContentOffsetY
+}
+
+assert tabTapBackFromEmptyRestoresUnloadedLongOffset {
+  given selectedPage == Long
+  and longScrollView.contentOffset.y > pinAnchorY - managedTopInset
+  when tabTap(Empty)
+  and childWindow.unloads(Long)
+  and tabTap(Long)
+  and longScrollView.contentSize becomesScrollable
+  then selectedIndex == Long
+  and collapseProgress == 1
+  and longScrollView.contentOffset.y == previousLongContentOffsetY
+}
+
+assert nonAdjacentProgrammaticPageRequestSkipsIntermediatePages {
+  when selectPage(target, animated: true)
+  and abs(target - source) > 1
+  then selectedIndex == target
+  and loadedChildIndexes == target.neighborhood(radius: 1)
+  and pagePosition doesNotSweepIntermediateIndexes
+}
+
+assert childScrollIndicatorsHiddenDuringHorizontalPaging {
+  given childScrollView.showsVerticalScrollIndicator == true
+  when PagePosition.isInteractive == true
+  then childScrollView.showsVerticalScrollIndicator == false
+  and childScrollView.showsHorizontalScrollIndicator == false
+  when PagePosition.progress == 0
+  then childScrollView.showsVerticalScrollIndicator == originalValue
 }
 
 assert pageRequestRollsBackOnCancel {
@@ -392,6 +493,8 @@ assert headerHostMigrationKeepsContainment {
 - `.overall` 刷新：多个 child 安装同一个外部刷新 action。
 - `.child` 刷新：每个 child 自己安装局部刷新控件。
 - 快速点击 Tab：最终停在最后目标。
+- 点击 Tab：相邻切换的 child controller appearance transition 使用 `animated:true`，非相邻切换使用 `animated:false`。
+- 非相邻 Tab/API 跳转：不显示中间页空白，不加载中间 child。
 - 横向滑动取消：Tab 和 indicator 回源。
 - 顶部回弹中切页：Header 不与列表顶部脱钩。
 - 刷新结束动画中：Header 不闪跳。

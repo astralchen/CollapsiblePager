@@ -136,8 +136,10 @@ xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'p
 
 ## Documentation Workflow
 
-- 修改公开 API、第一版范围、状态机、手势仲裁、刷新语义或 Header 高度策略时，同步更新 `docs/requirements-and-architecture.md`。
-- 修改默认视觉、动画、交互验收或 DSL 表达时，同步更新 `docs/ui-design-and-animation-dsl.md`。
+- 修改公开 API、第一版范围、架构分层、状态机、布局策略、UIKit lifecycle、手势仲裁、刷新语义或 Header 高度策略时，同步更新 `docs/requirements-and-architecture.md`。
+- 修改默认视觉、UI 层级、动画、交互验收或 DSL 表达时，同步更新 `docs/ui-design-and-animation-dsl.md`。
+- 修改实施顺序、任务验收、文件结构、测试片段、示例 App 接入方式或任何会影响后续开发执行路径的重要决策时，同步更新 `docs/superpowers/plans/2026-07-03-collapsible-pager-v1.md`。
+- 每次架构调整或其他重要工程约定调整后，必须检查上述三份文档和开发计划是否需要同步；不要只改代码或只改其中一处。
 - 文档中的第一版范围、后续阶段和待定设计决策必须保持一致；不要一处写第一版支持，另一处写后续再做。
 - 参考外部项目时，记录项目名、链接、阅读版本或 commit，以及本项目真正采用的设计结论。
 
@@ -162,5 +164,6 @@ xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'p
 - 先阅读相邻实现、测试和文档，再按现有模式改动。
 - 代码改动应保持小步、聚焦，不做无关重构，不重排 Xcode 工程文件无关 section。
 - 行为改动优先补测试；无法补测试时，在最终说明中写清剩余风险。
+- 涉及架构、布局、生命周期、手势、刷新、公开 API、示例流程或开发顺序的重要调整时，完成前必须同步检查 `docs/requirements-and-architecture.md`、`docs/ui-design-and-animation-dsl.md` 和 `docs/superpowers/plans/2026-07-03-collapsible-pager-v1.md`。
 - 完成后运行与改动范围匹配的最小验证；如果无法运行，说明原因。
 - 不要执行破坏性 git 命令，不要回滚非本人改动，除非用户明确要求。
