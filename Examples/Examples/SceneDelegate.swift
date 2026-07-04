@@ -9,13 +9,11 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
 
-        let pagerViewController = DemoPagerFactory.makePager(dataSource: demoDataSource)
+        let rootViewController = DemoPagerFactory.makeApplicationRoot(dataSource: demoDataSource)
         let window = UIWindow(windowScene: windowScene)
-        window.rootViewController = pagerViewController
+        window.rootViewController = rootViewController
         window.makeKeyAndVisible()
         self.window = window
-
-        pagerViewController.reloadData()
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {}

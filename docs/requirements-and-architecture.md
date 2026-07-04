@@ -66,6 +66,7 @@ Tabman 的优势是横向分页状态链路和 TabBar 渲染分层。
 - 支持连续 `PagePosition` 驱动 Tab selected progress 和 indicator focus rect。
 - 支持 `.none`、`.overall`、`.child` 三种刷新交互语义。
 - 支持没有 child 的空态兜底。
+- 支持作为业务 `UITabBarController -> UINavigationController -> UIViewController` 层级中的内容页，不假设自己是 window root。
 - 符合 Swift 6 strict concurrency 和 iOS 13 要求。
 
 ## 4. V1 非目标
@@ -512,10 +513,12 @@ UIKit 集成测试覆盖：
 
 示例 App 手动 QA 覆盖：
 
+- `UITabBarController -> UINavigationController -> CollapsiblePagerViewController` 集成层级，导航栏使用小标题。
 - 展开、折叠、吸顶。
 - 短内容、空内容、长内容。
 - `.overall` 和 `.child` 外部刷新。
 - 快速点击 Tab。
+- 导航栏按钮 push 新 pager 后，系统边缘返回手势仍可返回上一页。
 - 横向滑动取消。
 - 顶部回弹中切页。
 - 纵向减速中切页。

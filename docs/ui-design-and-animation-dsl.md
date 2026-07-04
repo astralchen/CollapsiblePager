@@ -486,6 +486,8 @@ assert headerHostMigrationKeepsContainment {
 
 示例 App 只用于展示接入方式，不把业务 UI 写入核心包。
 
+- App 根层级：验证 `UITabBarController -> UINavigationController -> CollapsiblePagerViewController` 下的小标题导航栏、安全区和底部 TabBar 集成。
+- 导航栏按钮：push 第二个 pager 后，通过系统边缘返回手势回到根 pager。
 - 长内容 child：验证折叠、吸顶和滚动位置保存。
 - 短内容 child：验证 bounce 和刷新 handoff。
 - 空内容 child：验证 managed inset 和外部刷新 reveal。

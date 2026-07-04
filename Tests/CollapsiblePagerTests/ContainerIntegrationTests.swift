@@ -150,6 +150,62 @@ import UIKit
 }
 
 @MainActor
+@Test func navigationPushAndPopForwardsChildAppearanceLifecycle() throws {
+    let rootPager = CollapsiblePagerViewController()
+    let rootDataSource = LifecycleDataSource(pageCount: 1)
+    rootPager.dataSource = rootDataSource
+    rootPager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+    rootPager.reloadData()
+
+    let navigationController = UINavigationController(rootViewController: rootPager)
+    navigationController.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    window.rootViewController = navigationController
+    window.makeKeyAndVisible()
+    defer { window.isHidden = true }
+    navigationController.view.layoutIfNeeded()
+
+    let rootChild = try #require(rootDataSource.child(at: 0))
+    #expect(rootChild.animatedEvents == ["willAppear:false", "didAppear:false"])
+
+    let pushedPager = CollapsiblePagerViewController()
+    let pushedDataSource = LifecycleDataSource(pageCount: 1)
+    pushedPager.dataSource = pushedDataSource
+    pushedPager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+    pushedPager.reloadData()
+
+    navigationController.pushViewController(pushedPager, animated: false)
+    navigationController.view.layoutIfNeeded()
+
+    let pushedChild = try #require(pushedDataSource.child(at: 0))
+    #expect(rootChild.animatedEvents == [
+        "willAppear:false",
+        "didAppear:false",
+        "willDisappear:false",
+        "didDisappear:false",
+    ])
+    #expect(pushedChild.animatedEvents == ["willAppear:false", "didAppear:false"])
+
+    navigationController.popViewController(animated: false)
+    navigationController.view.layoutIfNeeded()
+
+    #expect(rootChild.animatedEvents == [
+        "willAppear:false",
+        "didAppear:false",
+        "willDisappear:false",
+        "didDisappear:false",
+        "willAppear:false",
+        "didAppear:false",
+    ])
+    #expect(pushedChild.animatedEvents == [
+        "willAppear:false",
+        "didAppear:false",
+        "willDisappear:false",
+        "didDisappear:false",
+    ])
+}
+
+@MainActor
 @Test func adjacentTabBarSelectionAnimatesScrollAndControllerTransition() throws {
     let pager = CollapsiblePagerViewController()
     let dataSource = LifecycleDataSource(pageCount: 2)

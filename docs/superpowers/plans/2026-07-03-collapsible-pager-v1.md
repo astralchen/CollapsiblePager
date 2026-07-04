@@ -30,7 +30,7 @@
 - 非相邻 Tab/API 跳转采用 `UIPageViewController.setViewControllers` 式 source/target 语义，不通过连续 `contentOffset` 滚过中间页；相邻页动画仍使用 paging scroll 动画。
 - 短内容和空内容 child 需要 bottom inset 补偿，并观察 `contentSize` 变化，确保 Short/Empty 页也能向上滚到吸顶阈值。
 - TabBar 内部采用 scroll-ready 层级：`TabBarView -> ContentScrollView -> ItemLayoutView -> Item + IndicatorContainer`。V1 默认等宽且不公开横向滚动能力，但层级要为后续可滚动 TabBar 保持正确。
-- Examples 使用纯代码入口，不使用 `ViewController.swift` 作为主控制器，不使用 xib；`SceneDelegate` 直接挂载 demo pager。
+- Examples 使用纯代码入口，不使用 `ViewController.swift` 作为主控制器，不使用 xib；`SceneDelegate` 挂载 `UITabBarController -> UINavigationController -> CollapsiblePagerViewController` 层级，模拟实际业务 App 中 tab + navigation 的集成环境。
 
 ## 验证命令
 
@@ -1107,13 +1107,15 @@ Expected: ContainerIntegrationTests 通过。
 
 - 示例 App 使用核心包 public API 接入。
 - 示例 App 使用纯代码装配主界面，不使用 `ViewController.swift` 或 xib。
+- 示例 App 根层级为 `UITabBarController -> UINavigationController -> CollapsiblePagerViewController`，导航栏使用小标题。
+- 导航栏图标按钮可 push 新 pager，系统边缘返回手势可回到根 pager。
 - Header 内容是业务外部 demo，不写入核心包。
 - `.overall` 和 `.child` 刷新都由 demo child 自己安装。
 - UI test 覆盖基础展开、切页和空态。
 
 - [ ] **Step 1: 更新 SceneDelegate 纯代码入口**
 
-`SceneDelegate` 创建 `UIWindow`，使用 `DemoPagerFactory` 生成根 `CollapsiblePagerViewController`，并设置为 root view controller。不要恢复 `ViewController.swift`、Main storyboard 或 xib 主入口。
+`SceneDelegate` 创建 `UIWindow`，使用 `DemoPagerFactory` 生成根 `UITabBarController`，其第一个 tab 为 `UINavigationController(rootViewController: CollapsiblePagerViewController)`，并设置为 window root。不要恢复 `ViewController.swift`、Main storyboard 或 xib 主入口。
 
 - [ ] **Step 2: 创建 demo factory**
 
@@ -1129,7 +1131,7 @@ Header 只展示示例占位文本和高度变化按钮，用于触发 `reloadHe
 
 - [ ] **Step 5: 写 UI test**
 
-覆盖 launch、点击 Tab、空态不崩溃、下拉前 Header 先展开。
+覆盖 launch、点击 Tab、空态不崩溃、下拉前 Header 先展开，以及导航栏按钮 push 后的系统边缘返回手势。
 
 - [ ] **Step 6: 运行示例构建**
 

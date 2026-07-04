@@ -21,6 +21,24 @@ final class ExamplesUITests: XCTestCase {
     }
 
     @MainActor
+    func testNavigationButtonPushesPagerAndEdgeSwipeReturns() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let pushButton = app.navigationBars["CollapsiblePager"].buttons["Push Pager"]
+        XCTAssertTrue(pushButton.waitForExistence(timeout: 5))
+
+        pushButton.tap()
+        XCTAssertTrue(app.navigationBars["Pushed Pager"].waitForExistence(timeout: 5))
+
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: end)
+
+        XCTAssertTrue(app.navigationBars["CollapsiblePager"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         measure(metrics: [XCTApplicationLaunchMetric()]) {
             XCUIApplication().launch()
