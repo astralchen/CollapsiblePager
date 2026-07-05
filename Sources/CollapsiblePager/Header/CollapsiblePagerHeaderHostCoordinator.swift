@@ -9,9 +9,16 @@ enum CollapsiblePagerHeaderHostMoveReason: Sendable, Equatable {
 
 @MainActor
 final class CollapsiblePagerHeaderHostCoordinator {
+    private struct AppearanceTransition {
+        var controller: UIViewController
+        var appearing: Bool
+    }
+
     private weak var owner: UIViewController?
     private let hostView = CollapsiblePagerHeaderHostView()
     private var currentHeaderController: UIViewController?
+    private var appearedHeaderController: UIViewController?
+    private var activeAppearanceTransition: AppearanceTransition?
 
     var hostSuperviewForTesting: UIView? {
         hostView.superview
@@ -21,9 +28,14 @@ final class CollapsiblePagerHeaderHostCoordinator {
         self.owner = owner
     }
 
-    func setContent(_ content: CollapsiblePagerHeaderContent, initialContainer: UIView) {
+    func setContent(
+        _ content: CollapsiblePagerHeaderContent,
+        initialContainer: UIView,
+        ownerIsVisible: Bool = false,
+        animated: Bool = false
+    ) {
         moveHost(to: initialContainer, reason: .currentChild)
-        removeCurrentContent()
+        removeCurrentContent(ownerIsVisible: ownerIsVisible, animated: animated)
 
         switch content {
         case let .view(view):
@@ -37,6 +49,11 @@ final class CollapsiblePagerHeaderHostCoordinator {
             hostView.setContentView(viewController.view)
             viewController.didMove(toParent: owner)
             currentHeaderController = viewController
+            if ownerIsVisible {
+                viewController.beginAppearanceTransition(true, animated: animated)
+                viewController.endAppearanceTransition()
+                appearedHeaderController = viewController
+            }
         }
     }
 
@@ -57,13 +74,48 @@ final class CollapsiblePagerHeaderHostCoordinator {
         hostView.autoresizingMask = frame == nil ? [.flexibleWidth, .flexibleHeight] : [.flexibleWidth]
     }
 
-    func clearContent() {
-        removeCurrentContent()
+    func clearContent(ownerIsVisible: Bool = false, animated: Bool = false) {
+        removeCurrentContent(ownerIsVisible: ownerIsVisible, animated: animated)
         hostView.removeFromSuperview()
     }
 
-    private func removeCurrentContent() {
+    func beginAppearanceTransition(appearing: Bool, animated: Bool) {
+        guard activeAppearanceTransition == nil,
+              let controller = currentHeaderController else {
+            return
+        }
+
+        activeAppearanceTransition = AppearanceTransition(
+            controller: controller,
+            appearing: appearing
+        )
+        controller.beginAppearanceTransition(appearing, animated: animated)
+    }
+
+    func endAppearanceTransition(didAppear: Bool) {
+        guard let transition = activeAppearanceTransition else {
+            return
+        }
+
+        transition.controller.endAppearanceTransition()
+        if didAppear {
+            appearedHeaderController = transition.controller
+        } else if appearedHeaderController === transition.controller {
+            appearedHeaderController = nil
+        }
+        activeAppearanceTransition = nil
+    }
+
+    private func removeCurrentContent(ownerIsVisible: Bool, animated: Bool) {
         if let controller = currentHeaderController {
+            finishActiveAppearanceTransitionIfNeeded(for: controller)
+            if ownerIsVisible || appearedHeaderController === controller {
+                controller.beginAppearanceTransition(false, animated: animated)
+                controller.endAppearanceTransition()
+                if appearedHeaderController === controller {
+                    appearedHeaderController = nil
+                }
+            }
             controller.willMove(toParent: nil)
             hostView.setContentView(nil)
             controller.removeFromParent()
@@ -71,5 +123,20 @@ final class CollapsiblePagerHeaderHostCoordinator {
         } else {
             hostView.setContentView(nil)
         }
+    }
+
+    private func finishActiveAppearanceTransitionIfNeeded(for controller: UIViewController) {
+        guard let transition = activeAppearanceTransition,
+              transition.controller === controller else {
+            return
+        }
+
+        controller.endAppearanceTransition()
+        if transition.appearing {
+            appearedHeaderController = controller
+        } else if appearedHeaderController === controller {
+            appearedHeaderController = nil
+        }
+        activeAppearanceTransition = nil
     }
 }

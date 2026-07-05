@@ -386,7 +386,10 @@ final class DemoRefreshHandoffModeDataSource: NSObject, CollapsiblePagerViewCont
         var accessibilityID: String
     }
 
-    let headerView = DemoHeaderView()
+    let headerViewController = DemoHeaderViewController()
+    var headerView: DemoHeaderView {
+        headerViewController.headerView
+    }
 
     private let mode: CollapsiblePagerRefreshHandoffMode
     private let pages: [Page]
@@ -436,7 +439,7 @@ final class DemoRefreshHandoffModeDataSource: NSObject, CollapsiblePagerViewCont
     }
 
     func headerContent(in pagerViewController: CollapsiblePagerViewController) -> CollapsiblePagerHeaderContent {
-        .view(headerView)
+        .viewController(headerViewController)
     }
 
     func pagerViewController(_ pagerViewController: CollapsiblePagerViewController, didSelectPageAt index: Int) {
@@ -460,7 +463,10 @@ final class DemoPagerDataSource: NSObject, CollapsiblePagerViewControllerDataSou
         var accessibilityID: String
     }
 
-    let headerView = DemoHeaderView()
+    let headerViewController = DemoHeaderViewController()
+    var headerView: DemoHeaderView {
+        headerViewController.headerView
+    }
 
     private let pages = [
         Page(title: "Long", rowCount: 60, refreshTitle: nil, accessibilityID: "demo-list-long"),
@@ -498,7 +504,7 @@ final class DemoPagerDataSource: NSObject, CollapsiblePagerViewControllerDataSou
     }
 
     func headerContent(in pagerViewController: CollapsiblePagerViewController) -> CollapsiblePagerHeaderContent {
-        .view(headerView)
+        .viewController(headerViewController)
     }
 
     func pagerViewController(_ pagerViewController: CollapsiblePagerViewController, didSelectPageAt index: Int) {

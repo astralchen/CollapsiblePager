@@ -28,6 +28,8 @@ struct ExamplesTests {
         #expect(pager.configuration.refreshHandoffMode == .container)
         #expect(pager.containerRefreshHostScrollView.refreshControl?.attributedTitle?.string == "Container refresh")
         #expect(pager.effectiveSelectedIndex == 0)
+        #expect(dataSource.headerViewController.parent === pager)
+        #expect(dataSource.headerViewController.view === dataSource.headerView)
     }
 
     @Test func refreshHandoffValidationTabCoversAllModes() throws {
@@ -63,9 +65,11 @@ struct ExamplesTests {
 
             let pager = try #require(refreshHandoffModeController.pagerForTesting(mode: mode))
             #expect(pager.configuration.refreshHandoffMode == mode)
+            let dataSource = try #require(refreshHandoffModeController.dataSourceForTesting(mode: mode))
+            #expect(dataSource.headerViewController.parent === pager)
+            #expect(dataSource.headerViewController.view === dataSource.headerView)
             if mode == .child {
                 #expect(pager.configuration.headerPullDownRefreshBehavior == .suppressesChildRefresh)
-                let dataSource = try #require(refreshHandoffModeController.dataSourceForTesting(mode: mode))
                 #expect(
                     dataSource.headerView.subtitleTextForTesting ==
                     "Child mode: header pull-down is suppressed; pull from list content to trigger child refresh."

@@ -286,7 +286,9 @@ Header frame 的顶部由 `CollapsiblePagerHeaderTopBehavior` 决定。默认 `.
 
 - Header 支持 `UIView` 和 `UIViewController`。
 - Header controller 使用标准 UIKit containment，挂到 pager 下。
+- Header controller 的 appearance lifecycle 由 pager 手动转发。pager 出现/消失时转发 `beginAppearanceTransition` / `endAppearanceTransition`；pager 已可见时替换或清空 Header controller，会先让旧 controller disappear，再让新 controller appear。
 - Header 视觉迁移只移动 controller 的 `view`。
+- Header host 在 `HeaderMountView` 和 fixed overlay 之间迁移只是视觉宿主切换，不触发 Header controller appear/disappear。
 - 每个 child 有自己的 `HeaderMountView`，位于 managed top inset 对应区域。
 - `HeaderMountView` 的滚动占位高度等于 Header max height + TabBar height；挂载其中的 `HeaderHostView` 只占 Header max height，不覆盖底部 TabBar 预留区。
 - Header 展开、当前 child 未进入顶部回弹，且未处于横向切页、刷新或布局刷新冲突时，视觉宿主使用当前 child 的 `HeaderMountView`。

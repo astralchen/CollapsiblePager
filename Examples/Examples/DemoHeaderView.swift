@@ -1,6 +1,15 @@
 import UIKit
 
 @MainActor
+final class DemoHeaderViewController: UIViewController {
+    let headerView = DemoHeaderView()
+
+    override func loadView() {
+        view = headerView
+    }
+}
+
+@MainActor
 final class DemoHeaderView: UIView {
     var onReloadLayout: (() -> Void)?
 

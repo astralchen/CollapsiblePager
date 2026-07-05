@@ -3102,6 +3102,41 @@ xcodebuild -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iP
 
 Actual: `TEST SUCCEEDED`，Swift Testing 报告 101 个测试全部通过。
 
+## 2026-07-05 Header UIViewController lifecycle 补齐
+
+用户要求 `CollapsiblePagerHeaderContent.viewController` 支持完整 `UIViewController` 生命周期，并让示例页面 Header 通过 `UIViewController` 返回来验证。
+
+设计结论：
+
+- Header controller 继续使用标准 UIKit containment，parent 始终是 `CollapsiblePagerViewController`。
+- `HeaderHostView` 在当前 child 的 `HeaderMountView` 和 fixed overlay 之间迁移时，只移动 controller 的 `view`，不触发 appear/disappear。
+- pager 自身 `viewWillAppear` / `viewDidAppear` / `viewWillDisappear` / `viewDidDisappear` 时，手动转发 Header controller 的 `beginAppearanceTransition` / `endAppearanceTransition`。
+- pager 已可见时 `reloadData()` 替换或清空 Header controller，会让旧 Header controller 完成 disappear；新 Header controller 会立即完成 appear。
+- 示例 App 的根 pager 与 Refresh Handoff 验证页都改为持有 `DemoHeaderViewController`，data source 通过 `.viewController(...)` 返回 Header。
+
+Red:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'platform=iOS Simulator,id=40789BEC-6977-4FC6-AA42-0ACDF687EF7D' -derivedDataPath /tmp/CollapsiblePagerHeaderLifecycleRedAllDerivedData test -quiet
+```
+
+Actual: `TEST FAILED`，新增 `headerViewControllerReceivesPagerAppearanceLifecycle()` 和 `visiblePagerReplacesHeaderViewControllerWithAppearanceLifecycle()` 均失败，Header controller 未收到 appearance 事件。
+
+```sh
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/CollapsiblePagerHeaderExampleRedDerivedData build-for-testing -quiet
+```
+
+Actual: `TEST BUILD FAILED`，示例测试找不到 `DemoPagerDataSource.headerViewController` 和 `DemoRefreshHandoffModeDataSource.headerViewController`，证明示例尚未改为 Header controller 接入。
+
+Verification:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'platform=iOS Simulator,id=40789BEC-6977-4FC6-AA42-0ACDF687EF7D' -derivedDataPath /tmp/CollapsiblePagerHeaderLifecycleGreenCore2DerivedData test -quiet
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/CollapsiblePagerHeaderExampleGreenBuildForTesting2DerivedData build-for-testing -quiet
+```
+
+Actual: 核心测试 exit code 0；Examples build-for-testing exit code 0。
+
 ## 执行策略
 
 推荐使用 Subagent-Driven：

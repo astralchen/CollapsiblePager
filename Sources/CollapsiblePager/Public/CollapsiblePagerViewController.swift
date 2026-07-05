@@ -114,11 +114,13 @@ open class CollapsiblePagerViewController: UIViewController {
 
     open override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        headerHostCoordinator.beginAppearanceTransition(appearing: true, animated: animated)
         beginCurrentChildAppearanceTransition(appearing: true, animated: animated)
     }
 
     open override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        headerHostCoordinator.endAppearanceTransition(didAppear: true)
         endCurrentChildAppearanceTransition(didAppear: true)
         isPagerVisible = true
         appearedChildIndex = state.effectiveSelectedIndex
@@ -127,11 +129,13 @@ open class CollapsiblePagerViewController: UIViewController {
     open override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         isPagerVisible = false
+        headerHostCoordinator.beginAppearanceTransition(appearing: false, animated: animated)
         beginCurrentChildAppearanceTransition(appearing: false, animated: animated)
     }
 
     open override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        headerHostCoordinator.endAppearanceTransition(didAppear: false)
         endCurrentChildAppearanceTransition(didAppear: false)
         appearedChildIndex = nil
     }
@@ -165,7 +169,7 @@ open class CollapsiblePagerViewController: UIViewController {
         guard nextPageCount > 0, let dataSource else {
             tabBarView.reloadTitles([])
             tabBarView.update(position: nil)
-            headerHostCoordinator.clearContent()
+            headerHostCoordinator.clearContent(ownerIsVisible: isPagerVisible)
             applyLayout()
             return
         }
@@ -179,7 +183,11 @@ open class CollapsiblePagerViewController: UIViewController {
         if let effectiveSelectedIndex {
             pageContainer.scrollToPage(at: effectiveSelectedIndex, animated: false)
             _ = loadChildIfNeeded(at: effectiveSelectedIndex)
-            headerHostCoordinator.setContent(dataSource.headerContent(in: self), initialContainer: fixedHeaderContainer)
+            headerHostCoordinator.setContent(
+                dataSource.headerContent(in: self),
+                initialContainer: fixedHeaderContainer,
+                ownerIsVisible: isPagerVisible
+            )
         }
 
         applyLayout()
