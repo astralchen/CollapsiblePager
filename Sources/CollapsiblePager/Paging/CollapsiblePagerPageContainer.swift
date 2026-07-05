@@ -1,8 +1,27 @@
 import UIKit
 
 @MainActor
+private final class CollapsiblePagerPagingScrollView: UIScrollView {
+    var shouldBeginHorizontalPan: (@MainActor (UIPanGestureRecognizer) -> Bool)?
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        let superAllowsBegin = super.gestureRecognizerShouldBegin(gestureRecognizer)
+        guard superAllowsBegin,
+              gestureRecognizer === panGestureRecognizer,
+              let pan = gestureRecognizer as? UIPanGestureRecognizer else {
+            return superAllowsBegin
+        }
+
+        return shouldBeginHorizontalPan?(pan) ?? true
+    }
+}
+
+@MainActor
 final class CollapsiblePagerPageContainer: UIView, UIScrollViewDelegate {
-    let scrollView: UIScrollView
+    private let pagingScrollView: CollapsiblePagerPagingScrollView
+    var scrollView: UIScrollView {
+        pagingScrollView
+    }
     private var pageViews: [Int: UIView] = [:]
     var pageCount: Int = 0 {
         didSet {
@@ -13,15 +32,20 @@ final class CollapsiblePagerPageContainer: UIView, UIScrollViewDelegate {
     }
     var onPagePositionChanged: (@MainActor (PagePosition?) -> Void)?
     var onPageTransitionCompleted: (@MainActor (Int) -> Void)?
+    var shouldBeginHorizontalPan: (@MainActor (UIPanGestureRecognizer) -> Bool)? {
+        didSet {
+            pagingScrollView.shouldBeginHorizontalPan = shouldBeginHorizontalPan
+        }
+    }
 
     override init(frame: CGRect) {
-        scrollView = UIScrollView(frame: .zero)
+        pagingScrollView = CollapsiblePagerPagingScrollView(frame: .zero)
         super.init(frame: frame)
         configureScrollView()
     }
 
     required init?(coder: NSCoder) {
-        scrollView = UIScrollView(frame: .zero)
+        pagingScrollView = CollapsiblePagerPagingScrollView(frame: .zero)
         super.init(coder: coder)
         configureScrollView()
     }

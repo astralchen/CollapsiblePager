@@ -24,8 +24,18 @@ final class DemoHeaderView: UIView {
         selectionLabel.text = text
     }
 
+    func setTitle(_ title: String, subtitle: String) {
+        titleLabel.text = title
+        subtitleLabel.text = subtitle
+    }
+
+    var subtitleTextForTesting: String? {
+        subtitleLabel.text
+    }
+
     func setProgress(_ progress: CGFloat) {
         progressLabel.text = "Collapse: \(Int(progress * 100))%"
+        progressLabel.accessibilityValue = String(format: "%.2f", progress)
     }
 
     private func configure() {
@@ -43,10 +53,13 @@ final class DemoHeaderView: UIView {
         subtitleLabel.adjustsFontForContentSizeCategory = true
 
         selectionLabel.text = "Selected: Long"
+        selectionLabel.accessibilityIdentifier = "demo-header-selection"
         selectionLabel.font = .preferredFont(forTextStyle: .headline)
         selectionLabel.adjustsFontForContentSizeCategory = true
 
         progressLabel.text = "Collapse: 0%"
+        progressLabel.accessibilityIdentifier = "demo-header-progress"
+        progressLabel.accessibilityValue = "0.00"
         progressLabel.font = .preferredFont(forTextStyle: .caption1)
         progressLabel.textColor = .secondaryLabel
         progressLabel.adjustsFontForContentSizeCategory = true

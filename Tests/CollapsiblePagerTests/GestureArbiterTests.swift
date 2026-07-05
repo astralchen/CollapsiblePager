@@ -62,3 +62,16 @@ import Testing
 
     #expect(arbiter.gesturePriority(for: input) == .ignored)
 }
+
+@Test func layoutReloadBlocksHorizontalPaging() {
+    let arbiter = GestureArbiter()
+    let input = GestureArbiterInput(
+        translation: CGSize(width: 80, height: 1),
+        isOnFirstPage: false,
+        startsAtLeadingEdge: false,
+        isInHeader: false,
+        isLayoutReloadActive: true
+    )
+
+    #expect(arbiter.gesturePriority(for: input) == .ignored)
+}

@@ -13,6 +13,10 @@ final class CollapsiblePagerHeaderHostCoordinator {
     private let hostView = CollapsiblePagerHeaderHostView()
     private var currentHeaderController: UIViewController?
 
+    var hostSuperviewForTesting: UIView? {
+        hostView.superview
+    }
+
     init(owner: UIViewController) {
         self.owner = owner
     }
@@ -36,13 +40,21 @@ final class CollapsiblePagerHeaderHostCoordinator {
         }
     }
 
-    func moveHost(to container: UIView, reason: CollapsiblePagerHeaderHostMoveReason) {
+    func installGestureRecognizer(_ gestureRecognizer: UIGestureRecognizer) {
+        guard gestureRecognizer.view !== hostView else {
+            return
+        }
+
+        hostView.addGestureRecognizer(gestureRecognizer)
+    }
+
+    func moveHost(to container: UIView, frame: CGRect? = nil, reason: CollapsiblePagerHeaderHostMoveReason) {
         if hostView.superview !== container {
             container.addSubview(hostView)
         }
 
-        hostView.frame = container.bounds
-        hostView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        hostView.frame = frame ?? container.bounds
+        hostView.autoresizingMask = frame == nil ? [.flexibleWidth, .flexibleHeight] : [.flexibleWidth]
     }
 
     func clearContent() {

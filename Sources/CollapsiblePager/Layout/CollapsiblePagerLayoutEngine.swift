@@ -59,23 +59,21 @@ struct CollapsiblePagerLayoutEngine: Sendable {
         let nextRange = next.collapseRange
         let currentPin = currentPinAnchorY.clamped(to: 0...previousRange)
         let nextPin: CGFloat
-        let correction: CGFloat
 
         switch policy {
         case .preserveVisualPosition:
             nextPin = currentPin.clamped(to: 0...nextRange)
-            correction = next.maxHeight - previous.maxHeight
         case .preserveCollapseProgress:
             let progress = previousRange == 0 ? 1 : currentPin / previousRange
             nextPin = (progress * nextRange).clamped(to: 0...nextRange)
-            correction = nextPin - currentPin
         case .resetToExpanded:
             nextPin = 0
-            correction = -currentPin
         case .resetToCollapsed:
             nextPin = nextRange
-            correction = nextPin - currentPin
         }
+
+        let headerHeightDelta = next.maxHeight - previous.maxHeight
+        let correction = (nextPin - currentPin) - headerHeightDelta
 
         return CollapsiblePagerHeaderOffsetTransition(
             nextPinAnchorY: nextPin,

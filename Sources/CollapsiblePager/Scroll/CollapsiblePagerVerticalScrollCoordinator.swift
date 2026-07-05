@@ -27,6 +27,10 @@ struct VerticalScrollModel: Sendable, Equatable {
         _ = pinAnchor.update(to: pinAnchor.value.clamped(to: 0...self.pinThreshold))
     }
 
+    mutating func setPinAnchorY(_ pinAnchorY: CGFloat) {
+        _ = pinAnchor.update(to: max(0, pinAnchorY).clamped(to: 0...pinThreshold))
+    }
+
     mutating func handleCurrentOffsetY(_ offsetY: CGFloat) -> VerticalScrollModelResult {
         let proposedPinAnchorY = (offsetY + managedTopInset).clamped(to: 0...pinThreshold)
         let pinDeltaY = pinAnchor.update(to: proposedPinAnchorY)
@@ -63,6 +67,10 @@ final class CollapsiblePagerVerticalScrollCoordinator {
 
     func updateLayout(pinThreshold: CGFloat, managedTopInset: CGFloat) {
         model.update(pinThreshold: pinThreshold, managedTopInset: managedTopInset)
+    }
+
+    func setPinAnchorY(_ pinAnchorY: CGFloat) {
+        model.setPinAnchorY(pinAnchorY)
     }
 
     func replaceRecords(_ records: [CollapsiblePagerChildRecord], currentIndex: Int?) {

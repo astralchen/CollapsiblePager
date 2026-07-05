@@ -16,14 +16,38 @@ import UIKit
     let pager = CollapsiblePagerViewController()
     let store = CollapsiblePagerChildStore(owner: pager)
     let child = ScrollChild()
+    child.scrollView.automaticallyAdjustsScrollIndicatorInsets = true
 
     let record = try #require(store.makeRecord(for: child, index: 0, managedTopInset: 308))
 
     #expect(record.viewController === child)
     #expect(record.scrollView.contentInset.top == 308)
     #expect(record.scrollView.verticalScrollIndicatorInsets.top == 308)
+    #expect(record.scrollView.automaticallyAdjustsScrollIndicatorInsets == false)
     #expect(record.scrollView.contentInsetAdjustmentBehavior == .never)
     #expect(record.mountView.superview === child.scrollView)
+}
+
+@MainActor
+@Test func childStoreReplacesStaleBottomScrollIndicatorInset() throws {
+    let pager = CollapsiblePagerViewController()
+    let store = CollapsiblePagerChildStore(owner: pager)
+    let child = ScrollChild()
+    child.scrollView.verticalScrollIndicatorInsets.bottom = 160
+
+    let record = try #require(
+        store.makeRecord(
+            for: child,
+            index: 0,
+            managedTopInset: 308,
+            managedBottomInset: 34
+        )
+    )
+
+    #expect(child.scrollView.verticalScrollIndicatorInsets.bottom == 34)
+
+    store.updateManagedInset(for: record, managedTopInset: 308, managedBottomInset: 20)
+    #expect(child.scrollView.verticalScrollIndicatorInsets.bottom == 20)
 }
 
 @MainActor

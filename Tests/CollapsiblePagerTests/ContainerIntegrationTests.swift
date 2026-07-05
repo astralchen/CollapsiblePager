@@ -206,6 +206,74 @@ import UIKit
 }
 
 @MainActor
+@Test func pushedPagerWithHiddenBottomBarUpdatesChildScrollIndicatorInset() throws {
+    let rootPager = CollapsiblePagerViewController()
+    let rootDataSource = DemoDataSource(pageCount: 1)
+    rootPager.dataSource = rootDataSource
+    rootPager.reloadData()
+
+    let navigationController = UINavigationController(rootViewController: rootPager)
+    let tabBarController = UITabBarController()
+    tabBarController.viewControllers = [navigationController]
+    tabBarController.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    window.rootViewController = tabBarController
+    window.makeKeyAndVisible()
+    defer { window.isHidden = true }
+    tabBarController.view.layoutIfNeeded()
+    navigationController.view.layoutIfNeeded()
+    rootPager.view.layoutIfNeeded()
+
+    let rootScrollView = try #require(rootPager.childScrollViewForTesting(at: 0))
+    let visibleTabBarBottomInset = rootPager.view.safeAreaInsets.bottom
+    #expect(rootScrollView.verticalScrollIndicatorInsets.bottom == visibleTabBarBottomInset)
+
+    let pushedPager = CollapsiblePagerViewController()
+    let pushedDataSource = DemoDataSource(pageCount: 1)
+    pushedPager.dataSource = pushedDataSource
+    pushedPager.hidesBottomBarWhenPushed = true
+    pushedPager.reloadData()
+
+    navigationController.pushViewController(pushedPager, animated: false)
+    tabBarController.view.layoutIfNeeded()
+    navigationController.view.layoutIfNeeded()
+    pushedPager.view.layoutIfNeeded()
+
+    let pushedScrollView = try #require(pushedPager.childScrollViewForTesting(at: 0))
+    let hiddenTabBarBottomInset = pushedPager.view.safeAreaInsets.bottom
+    #expect(hiddenTabBarBottomInset < visibleTabBarBottomInset)
+    #expect(pushedScrollView.automaticallyAdjustsScrollIndicatorInsets == false)
+    #expect(pushedScrollView.verticalScrollIndicatorInsets.bottom == hiddenTabBarBottomInset)
+}
+
+@MainActor
+@Test func embeddedPagerPinsHeaderToOwnBoundsWhenPlacedBelowNavigationChrome() throws {
+    let host = UIViewController()
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+
+    let navigationController = UINavigationController(rootViewController: host)
+    navigationController.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    window.rootViewController = navigationController
+    window.makeKeyAndVisible()
+    defer { window.isHidden = true }
+
+    host.addChild(pager)
+    host.view.addSubview(pager.view)
+    pager.view.frame = CGRect(x: 0, y: 220, width: 390, height: 624)
+    pager.didMove(toParent: host)
+
+    pager.reloadData()
+    navigationController.view.layoutIfNeeded()
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.headerFrameForTesting == CGRect(x: 0, y: 0, width: 390, height: 260))
+    #expect(pager.tabBarFrameForTesting == CGRect(x: 0, y: 260, width: 390, height: 48))
+}
+
+@MainActor
 @Test func adjacentTabBarSelectionAnimatesScrollAndControllerTransition() throws {
     let pager = CollapsiblePagerViewController()
     let dataSource = LifecycleDataSource(pageCount: 2)
@@ -430,6 +498,780 @@ import UIKit
 }
 
 @MainActor
+@Test func reloadHeaderLayoutPreservesVisualPositionWhenHeaderHeightChanges() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.header.heightMode = .fixed(max: 260, min: 0)
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.setContentOffset(CGPoint(x: 0, y: -178), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(abs(pager.collapseProgressForTesting - 0.5) < 0.001)
+
+    pager.configuration.header.heightMode = .fixed(max: 360, min: 0)
+    pager.view.layoutIfNeeded()
+
+    #expect(abs(pager.collapseProgressForTesting - (130.0 / 360.0)) < 0.001)
+    #expect(scrollView.contentInset.top == 408)
+    #expect(scrollView.contentOffset.y == -278)
+    #expect(pager.headerFrameForTesting.height == 230)
+    #expect(scrollView.contentOffset.y + scrollView.contentInset.top == 130)
+}
+
+@MainActor
+@Test func reloadHeaderLayoutCanResetToExpandedOrCollapsed() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.setContentOffset(CGPoint(x: 0, y: -48), animated: false)
+    pager.view.layoutIfNeeded()
+
+    pager.reloadHeaderLayout(offsetPolicy: .resetToExpanded)
+    pager.view.layoutIfNeeded()
+    #expect(pager.collapseProgressForTesting == 0)
+    #expect(scrollView.contentOffset.y == -308)
+
+    pager.reloadHeaderLayout(offsetPolicy: .resetToCollapsed)
+    pager.view.layoutIfNeeded()
+    #expect(pager.collapseProgressForTesting == 1)
+    #expect(scrollView.contentOffset.y == -48)
+}
+
+@MainActor
+@Test func headerHostUsesCurrentChildMountWhenExpandedAndFixedOverlayWhenPinned() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 2)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let firstMount = try #require(pager.headerMountViewForTesting(at: 0))
+    #expect(pager.headerHostSuperviewForTesting === firstMount)
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.setContentOffset(CGPoint(x: 0, y: -48), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.collapseProgressForTesting == 1)
+    #expect(pager.headerHostSuperviewForTesting === pager.fixedHeaderContainerForTesting)
+}
+
+@MainActor
+@Test func expandedHeaderHostInsideChildMountDoesNotCoverTabBarSpacer() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let mountView = try #require(pager.headerMountViewForTesting(at: 0))
+    let headerHostView = try #require(mountView.subviews.first)
+
+    #expect(mountView.bounds.height == 308)
+    #expect(headerHostView.frame == CGRect(x: 0, y: 0, width: 390, height: 260))
+}
+
+@MainActor
+@Test func topBounceKeepsHeaderHostInFixedOverlayToAvoidTabBarOverlap() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .none
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.setContentOffset(CGPoint(x: 0, y: -330), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.collapseProgressForTesting == 0)
+    #expect(pager.activeRefreshHandoffForTesting == nil)
+    #expect(pager.headerHostSuperviewForTesting === pager.fixedHeaderContainerForTesting)
+    #expect(pager.tabBarFrameForTesting.minY == pager.headerFrameForTesting.maxY)
+
+    let mountView = try #require(pager.headerMountViewForTesting(at: 0))
+    scrollView.setContentOffset(CGPoint(x: 0, y: -308), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.headerHostSuperviewForTesting === mountView)
+}
+
+@MainActor
+@Test func headerHostMovesToTargetChildMountAfterCompletedPageSelection() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 2)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+    pager.tapTabItemForTesting(at: 1)
+
+    #expect(pager.headerHostSuperviewForTesting === pager.fixedHeaderContainerForTesting)
+
+    pager.completePendingPageTransitionForTesting(targetIndex: 1)
+    pager.view.layoutIfNeeded()
+
+    let secondMount = try #require(pager.headerMountViewForTesting(at: 1))
+    #expect(pager.headerHostSuperviewForTesting === secondMount)
+}
+
+@MainActor
+@Test func pagerBlocksHorizontalPagingFromHeaderArea() {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 2)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let allowed = pager.shouldBeginHorizontalPagingForTesting(
+        translation: CGSize(width: -80, height: 4),
+        location: CGPoint(x: 120, y: pager.headerFrameForTesting.midY)
+    )
+
+    #expect(allowed == false)
+}
+
+@MainActor
+@Test func pagerAllowsHorizontalPagingFromPageContentArea() {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 2)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let allowed = pager.shouldBeginHorizontalPagingForTesting(
+        translation: CGSize(width: -80, height: 4),
+        location: CGPoint(x: 120, y: pager.tabBarFrameForTesting.maxY + 80)
+    )
+
+    #expect(allowed)
+}
+
+@MainActor
+@Test func pullDownDoesNotBeginRefreshHandoffUntilHeaderExpanded() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .child
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.setContentOffset(CGPoint(x: 0, y: -120), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.activeRefreshHandoffForTesting == nil)
+}
+
+@MainActor
+@Test func pullDownBeginsChildRefreshHandoffWhenExpandedAndAtTop() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .child
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.setContentOffset(CGPoint(x: 0, y: -330), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.activeRefreshHandoffForTesting == .childScrollView(index: 0))
+    #expect(pager.containerRefreshHostScrollViewForTesting.contentOffset.y == 0)
+}
+
+@MainActor
+@Test func pullDownInContainerModeRoutesOverscrollToContainerRefreshHost() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+    let initialHeaderFrame = pager.headerFrameForTesting
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.setContentOffset(CGPoint(x: 0, y: -330), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.activeRefreshHandoffForTesting == .containerHost(index: 0))
+    #expect(scrollView.contentOffset.y == -308)
+    #expect(pager.containerRefreshHostScrollViewForTesting.contentOffset.y == -22)
+    #expect(pager.headerFrameForTesting.minY == initialHeaderFrame.minY + 22)
+    #expect(pager.tabBarFrameForTesting.minY == pager.headerFrameForTesting.maxY)
+    #expect(pager.headerHostSuperviewForTesting === pager.fixedHeaderContainerForTesting)
+}
+
+@MainActor
+@Test func pendingContainerRefreshProxyKeepsHeaderInFixedOverlayBeforeHandoffCommits() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.setContentOffset(CGPoint(x: 0, y: -308), animated: false)
+    pager.view.layoutIfNeeded()
+
+    pager.applyContainerRefreshProxyOverscrollForTesting(-24)
+
+    #expect(pager.activeRefreshHandoffForTesting == nil)
+    #expect(try containerRefreshProxyOverscrollOffsetY(in: pager) == -24)
+    #expect(pager.headerHostSuperviewForTesting === pager.fixedHeaderContainerForTesting)
+}
+
+@MainActor
+@Test func activeContainerRefreshHostPanDoesNotResetWhenOffsetTouchesBaseline() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let host = try #require(
+        pager.containerRefreshHostScrollViewForTesting as? CollapsiblePagerContainerRefreshHostScrollView
+    )
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.setContentOffset(CGPoint(x: 0, y: -308), animated: false)
+    pager.view.layoutIfNeeded()
+
+    host.setContentOffset(CGPoint(x: 0, y: host.neutralBaselineContentOffsetY - 1), animated: false)
+    #expect(host.contentOffset.y == host.neutralBaselineContentOffsetY - 1)
+    host.scrollViewDidScroll(host)
+    #expect(pager.activeRefreshHandoffForTesting == .containerHost(index: 0))
+
+    host.setContentOffset(CGPoint(x: 0, y: host.neutralBaselineContentOffsetY), animated: false)
+    #expect(host.contentOffset.y == host.neutralBaselineContentOffsetY)
+    host.scrollViewDidScroll(host)
+    #expect(pager.activeRefreshHandoffForTesting == .containerHost(index: 0))
+
+    host.scrollViewDidEndDragging(host, willDecelerate: false)
+    #expect(pager.activeRefreshHandoffForTesting == nil)
+}
+
+@MainActor
+@Test func proxiedContainerRefreshOverscrollSurvivesIdleHostBaselineCorrection() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let host = try #require(
+        pager.containerRefreshHostScrollViewForTesting as? CollapsiblePagerContainerRefreshHostScrollView
+    )
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+
+    scrollView.setContentOffset(CGPoint(x: 0, y: -305), animated: false)
+    pager.view.layoutIfNeeded()
+    #expect(pager.collapseProgressForTesting > 0)
+
+    scrollView.setContentOffset(CGPoint(x: 0, y: -330), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.activeRefreshHandoffForTesting == .containerHost(index: 0))
+    #expect(scrollView.contentOffset.y == -308)
+    #expect(host.contentOffset.y == -22)
+
+    host.setContentOffset(CGPoint(x: 0, y: 0), animated: false)
+
+    #expect(host.contentOffset.y == -22)
+    #expect(pager.headerFrameForTesting.minY == 22)
+    #expect(pager.tabBarFrameForTesting.minY == pager.headerFrameForTesting.maxY)
+}
+
+@MainActor
+@Test func proxiedContainerRefreshOverscrollCancelsWhenChildLeavesExpandedTop() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = TrackingDataSource()
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(dataSource.child(at: 0)?.trackingScrollView)
+    let host = try #require(
+        pager.containerRefreshHostScrollViewForTesting as? CollapsiblePagerContainerRefreshHostScrollView
+    )
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.simulatedTracking = true
+    scrollView.simulatedDragging = true
+
+    scrollView.setContentOffset(CGPoint(x: 0, y: -330), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.activeRefreshHandoffForTesting == .containerHost(index: 0))
+    #expect(host.contentOffset.y == -22)
+
+    scrollView.setContentOffset(CGPoint(x: 0, y: -303), animated: false)
+    pager.view.layoutIfNeeded()
+
+    let mountView = try #require(pager.headerMountViewForTesting(at: 0))
+    #expect(pager.collapseProgressForTesting > 0)
+    #expect(pager.activeRefreshHandoffForTesting == nil)
+    #expect(host.contentOffset.y == 0)
+    #expect(pager.headerHostSuperviewForTesting === mountView)
+}
+
+@MainActor
+@Test func proxiedContainerRefreshOverscrollUpdatesProxyWhileTrackedChildOverscrollChanges() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = TrackingDataSource()
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(dataSource.child(at: 0)?.trackingScrollView)
+    let host = pager.containerRefreshHostScrollViewForTesting
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.simulatedTracking = true
+    scrollView.simulatedDragging = true
+
+    scrollView.setContentOffset(CGPoint(x: 0, y: -330), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.activeRefreshHandoffForTesting == .containerHost(index: 0))
+    #expect(host.contentOffset.y == -22)
+
+    scrollView.setContentOffset(CGPoint(x: 0, y: -309), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.collapseProgressForTesting == 0)
+    #expect(pager.activeRefreshHandoffForTesting == .containerHost(index: 0))
+    #expect(host.contentOffset.y == -1)
+    #expect(try containerRefreshProxyOverscrollOffsetY(in: pager) == -1)
+    #expect(pager.headerHostSuperviewForTesting === pager.fixedHeaderContainerForTesting)
+}
+
+@MainActor
+@Test func proxiedContainerRefreshOverscrollFinishesWhenTrackedChildPanEndsIdle() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = TrackingDataSource()
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(dataSource.child(at: 0)?.trackingScrollView)
+    let host = try #require(
+        pager.containerRefreshHostScrollViewForTesting as? CollapsiblePagerContainerRefreshHostScrollView
+    )
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.simulatedTracking = true
+    scrollView.simulatedDragging = true
+
+    scrollView.setContentOffset(CGPoint(x: 0, y: -330), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.activeRefreshHandoffForTesting == .containerHost(index: 0))
+    #expect(try containerRefreshProxyOverscrollOffsetY(in: pager) == -22)
+    #expect(host.contentOffset.y == -22)
+
+    scrollView.simulatedTracking = false
+    scrollView.simulatedDragging = false
+    pager.finishProxiedContainerRefreshHandoffForTesting(at: 0)
+
+    #expect(pager.activeRefreshHandoffForTesting == nil)
+    #expect(try containerRefreshProxyOverscrollOffsetY(in: pager) == 0)
+    #expect(host.contentOffset.y == host.neutralBaselineContentOffsetY)
+}
+
+@MainActor
+@Test func proxiedContainerRefreshOverscrollReleasesProxyWhenExternalInsetTakesOwnership() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = TrackingDataSource()
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(dataSource.child(at: 0)?.trackingScrollView)
+    let host = try #require(
+        pager.containerRefreshHostScrollViewForTesting as? CollapsiblePagerContainerRefreshHostScrollView
+    )
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.simulatedTracking = true
+    scrollView.simulatedDragging = true
+
+    scrollView.setContentOffset(CGPoint(x: 0, y: -330), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.activeRefreshHandoffForTesting == .containerHost(index: 0))
+    #expect(try containerRefreshProxyOverscrollOffsetY(in: pager) == -22)
+
+    var externalInset = host.contentInset
+    externalInset.top += 60
+    host.contentInset = externalInset
+    host.scrollViewDidScroll(host)
+
+    #expect(pager.activeRefreshHandoffForTesting == .containerHost(index: 0))
+    #expect(try containerRefreshProxyOverscrollOffsetY(in: pager) == 0)
+}
+
+@MainActor
+@Test func activeContainerRefreshHostPanContinuesWhenInitialMotionIsZero() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = TrackingDataSource()
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(dataSource.child(at: 0)?.trackingScrollView)
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.simulatedTracking = true
+    scrollView.simulatedDragging = true
+
+    scrollView.setContentOffset(CGPoint(x: 0, y: -330), animated: false)
+    pager.view.layoutIfNeeded()
+    scrollView.setContentOffset(CGPoint(x: 0, y: -309), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.activeRefreshHandoffForTesting == .containerHost(index: 0))
+    #expect(try containerRefreshProxyOverscrollOffsetY(in: pager) == -1)
+    #expect(
+        pager.shouldBeginContainerRefreshHostPanForTesting(
+            translation: .zero,
+            velocity: .zero
+        )
+    )
+}
+
+@MainActor
+@Test func containerRefreshHostPanTakesOwnershipFromProxyOverscroll() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = TrackingDataSource()
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(dataSource.child(at: 0)?.trackingScrollView)
+    let host = try #require(
+        pager.containerRefreshHostScrollViewForTesting as? CollapsiblePagerContainerRefreshHostScrollView
+    )
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.simulatedTracking = true
+    scrollView.simulatedDragging = true
+
+    scrollView.setContentOffset(CGPoint(x: 0, y: -330), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.activeRefreshHandoffForTesting == .containerHost(index: 0))
+    #expect(try containerRefreshProxyOverscrollOffsetY(in: pager) == -22)
+    #expect(host.gestureRecognizerShouldBegin(host.panGestureRecognizer))
+
+    #expect(try containerRefreshProxyOverscrollOffsetY(in: pager) == 0)
+    host.setContentOffset(CGPoint(x: 0, y: host.neutralBaselineContentOffsetY - 40), animated: false)
+    host.scrollViewDidScroll(host)
+    #expect(host.contentOffset.y == host.neutralBaselineContentOffsetY - 40)
+}
+
+@MainActor
+@Test func containerRefreshHostUsesNeutralOuterScrollBaselineForVisibleRefreshReveal() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let host = pager.containerRefreshHostScrollViewForTesting
+
+    #expect(scrollView.contentInset.top == 308)
+    #expect(host.contentInset.top == 0)
+    #expect(host.contentOffset.y == 0)
+    #expect(host.frame == pager.view.bounds)
+    #expect(pager.pinnedSurfaceSuperviewForTesting === host)
+}
+
+@MainActor
+@Test func containerRefreshHostBaselineStartsBelowNavigationChrome() throws {
+    let dataSource = DemoDataSource(pageCount: 1)
+    let pager = CollapsiblePagerViewController()
+    pager.dataSource = dataSource
+
+    let navigationController = UINavigationController(rootViewController: pager)
+    navigationController.navigationBar.prefersLargeTitles = false
+    navigationController.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    window.rootViewController = navigationController
+    window.makeKeyAndVisible()
+    defer { window.isHidden = true }
+
+    pager.reloadData()
+    navigationController.view.layoutIfNeeded()
+    pager.view.layoutIfNeeded()
+
+    let host = try #require(
+        pager.containerRefreshHostScrollViewForTesting as? CollapsiblePagerContainerRefreshHostScrollView
+    )
+    let refreshBaselineTop = navigationController.navigationBar.convert(
+        navigationController.navigationBar.bounds,
+        to: pager.view
+    ).maxY
+
+    #expect(refreshBaselineTop > 0)
+    #expect(host.frame == pager.view.bounds)
+    #expect(host.contentInset.top == refreshBaselineTop)
+    #expect(host.contentOffset.y == -refreshBaselineTop)
+    #expect(host.contentSize.height - host.bounds.height + host.contentInset.bottom == host.neutralBaselineContentOffsetY)
+    #expect(pager.headerFrameForTesting.minY == refreshBaselineTop)
+    #expect(pager.tabBarFrameForTesting.minY == pager.headerFrameForTesting.maxY)
+}
+
+@MainActor
+@Test func activeContainerRefreshHostClampsAboveNeutralBaseline() throws {
+    let dataSource = DemoDataSource(pageCount: 1)
+    let pager = CollapsiblePagerViewController()
+    pager.dataSource = dataSource
+
+    let navigationController = UINavigationController(rootViewController: pager)
+    navigationController.navigationBar.prefersLargeTitles = false
+    navigationController.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    window.rootViewController = navigationController
+    window.makeKeyAndVisible()
+    defer { window.isHidden = true }
+
+    pager.reloadData()
+    navigationController.view.layoutIfNeeded()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let host = try #require(
+        pager.containerRefreshHostScrollViewForTesting as? CollapsiblePagerContainerRefreshHostScrollView
+    )
+    let expectedHeaderFrame = pager.headerFrameForTesting
+    let expectedTabBarFrame = pager.tabBarFrameForTesting
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.setContentOffset(CGPoint(x: 0, y: -308), animated: false)
+    pager.view.layoutIfNeeded()
+
+    host.setContentOffset(CGPoint(x: 0, y: host.neutralBaselineContentOffsetY - 12), animated: false)
+    host.scrollViewDidScroll(host)
+    #expect(pager.activeRefreshHandoffForTesting == .containerHost(index: 0))
+
+    host.setContentOffset(CGPoint(x: 0, y: 0), animated: false)
+    host.scrollViewDidScroll(host)
+
+    #expect(host.contentOffset.y == host.neutralBaselineContentOffsetY)
+    #expect(pager.activeRefreshHandoffForTesting == .containerHost(index: 0))
+    #expect(pager.headerFrameForTesting == expectedHeaderFrame)
+    #expect(pager.tabBarFrameForTesting == expectedTabBarFrame)
+
+    host.scrollViewDidEndDragging(host, willDecelerate: false)
+    #expect(pager.activeRefreshHandoffForTesting == nil)
+    #expect(host.contentOffset.y == host.neutralBaselineContentOffsetY)
+}
+
+@MainActor
+@Test func containerRefreshHostPanRequiresContainerModeExpandedHeaderAndTopChild() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+
+    #expect(
+        pager.shouldBeginContainerRefreshHostPanForTesting(
+            translation: CGSize(width: 0, height: 40),
+            velocity: CGSize(width: 0, height: 120)
+        )
+    )
+    #expect(
+        pager.shouldBeginContainerRefreshHostPanForTesting(
+            translation: .zero,
+            velocity: CGSize(width: 0, height: 160)
+        )
+    )
+
+    scrollView.setContentOffset(CGPoint(x: 0, y: -120), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(
+        pager.shouldBeginContainerRefreshHostPanForTesting(
+            translation: CGSize(width: 0, height: 40),
+            velocity: CGSize(width: 0, height: 120)
+        ) == false
+    )
+}
+
+@MainActor
+@Test func containerRefreshHostPanHasPriorityOverLoadedChildPan() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.containerRefreshHostPanHasPriorityOverChildPanForTesting(at: 0))
+}
+
+@MainActor
+@Test func headerPullDownRefreshGateDefaultsToAllowingChildRefresh() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .child
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.headerPullDownGateHasPriorityOverChildPanForTesting(at: 0))
+    #expect(
+        pager.shouldBeginHeaderPullDownGateForTesting(
+            translation: CGSize(width: 0, height: 40),
+            velocity: CGSize(width: 0, height: 120)
+        ) == false
+    )
+}
+
+@MainActor
+@Test func headerPullDownRefreshGateSuppressesChildRefreshWhenConfigured() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .child
+    configuration.headerPullDownRefreshBehavior = .suppressesChildRefresh
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.headerPullDownGateHasPriorityOverChildPanForTesting(at: 0))
+    #expect(
+        pager.shouldBeginHeaderPullDownGateForTesting(
+            translation: CGSize(width: 0, height: 40),
+            velocity: CGSize(width: 0, height: 120)
+        )
+    )
+    #expect(
+        pager.shouldBeginHeaderPullDownGateForTesting(
+            translation: .zero,
+            velocity: CGSize(width: 0, height: 160)
+        )
+    )
+}
+
+@MainActor
+@Test func activeRefreshHandoffBlocksHorizontalPaging() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .child
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 2)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.setContentOffset(CGPoint(x: 0, y: -330), animated: false)
+    pager.view.layoutIfNeeded()
+
+    let allowed = pager.shouldBeginHorizontalPagingForTesting(
+        translation: CGSize(width: -80, height: 4),
+        location: CGPoint(x: 120, y: pager.tabBarFrameForTesting.maxY + 80)
+    )
+
+    #expect(allowed == false)
+}
+
+@MainActor
 @Test func shortPageCanScrollEnoughToCollapseAfterSelection() throws {
     let pager = CollapsiblePagerViewController()
     let dataSource = DemoDataSource(pageCount: 3)
@@ -485,6 +1327,67 @@ private final class DemoChildViewController: UIViewController, CollapsiblePagerS
     override func loadView() {
         view = scrollView
     }
+}
+
+@MainActor
+private final class TrackingDataSource: CollapsiblePagerViewControllerDataSource {
+    private let children = [TrackingChildViewController()]
+
+    func child(at index: Int) -> TrackingChildViewController? {
+        guard children.indices.contains(index) else {
+            return nil
+        }
+        return children[index]
+    }
+
+    func numberOfPages(in pagerViewController: CollapsiblePagerViewController) -> Int {
+        children.count
+    }
+
+    func pagerViewController(_ pagerViewController: CollapsiblePagerViewController, titleForPageAt index: Int) -> String {
+        "Page \(index)"
+    }
+
+    func pagerViewController(_ pagerViewController: CollapsiblePagerViewController, viewControllerForPageAt index: Int) -> UIViewController {
+        children[index]
+    }
+
+    func headerContent(in pagerViewController: CollapsiblePagerViewController) -> CollapsiblePagerHeaderContent {
+        .view(UIView())
+    }
+}
+
+@MainActor
+private final class TrackingChildViewController: UIViewController, CollapsiblePagerScrollProviding {
+    let trackingScrollView = TrackingScrollView()
+    var pagerScrollView: UIScrollView { trackingScrollView }
+
+    override func loadView() {
+        view = trackingScrollView
+    }
+}
+
+private final class TrackingScrollView: UIScrollView {
+    var simulatedTracking = false
+    var simulatedDragging = false
+
+    override var isTracking: Bool {
+        simulatedTracking
+    }
+
+    override var isDragging: Bool {
+        simulatedDragging
+    }
+}
+
+@MainActor
+private func containerRefreshProxyOverscrollOffsetY(
+    in pager: CollapsiblePagerViewController
+) throws -> CGFloat {
+    let value = Mirror(reflecting: pager).children.first {
+        $0.label == "containerRefreshProxyOverscrollOffsetY"
+    }?.value as? CGFloat
+    return try #require(value)
 }
 
 @MainActor

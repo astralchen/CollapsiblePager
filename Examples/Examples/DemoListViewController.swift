@@ -5,7 +5,7 @@ import UIKit
 final class DemoListViewController: UITableViewController, CollapsiblePagerScrollProviding {
     private let pageTitle: String
     private let rowCount: Int
-    private let refreshTitle: String
+    private let refreshTitle: String?
     private let tableAccessibilityID: String
     private let demoRefreshController = DemoRefreshController()
 
@@ -13,7 +13,7 @@ final class DemoListViewController: UITableViewController, CollapsiblePagerScrol
         tableView
     }
 
-    init(title: String, rowCount: Int, refreshTitle: String, accessibilityID: String) {
+    init(title: String, rowCount: Int, refreshTitle: String?, accessibilityID: String) {
         self.pageTitle = title
         self.rowCount = rowCount
         self.refreshTitle = refreshTitle
@@ -29,7 +29,9 @@ final class DemoListViewController: UITableViewController, CollapsiblePagerScrol
         super.viewDidLoad()
         tableView.accessibilityIdentifier = tableAccessibilityID
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "Cell")
-        demoRefreshController.attach(to: tableView, title: refreshTitle)
+        if let refreshTitle {
+            demoRefreshController.attach(to: tableView, title: refreshTitle)
+        }
         configureEmptyState()
     }
 
@@ -41,6 +43,7 @@ final class DemoListViewController: UITableViewController, CollapsiblePagerScrol
         let cell = tableView.dequeueReusableCell(withIdentifier: "Cell", for: indexPath)
         cell.textLabel?.text = "\(pageTitle) row \(indexPath.row + 1)"
         cell.detailTextLabel?.text = nil
+        cell.accessibilityIdentifier = "\(tableAccessibilityID)-row-\(indexPath.row)"
         cell.selectionStyle = .none
         return cell
     }
@@ -53,6 +56,7 @@ final class DemoListViewController: UITableViewController, CollapsiblePagerScrol
 
         let label = UILabel()
         label.text = "No rows in Empty"
+        label.accessibilityIdentifier = "\(tableAccessibilityID)-empty"
         label.textAlignment = .center
         label.textColor = .secondaryLabel
         label.font = .preferredFont(forTextStyle: .headline)

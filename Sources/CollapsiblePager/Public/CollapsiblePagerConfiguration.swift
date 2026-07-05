@@ -15,20 +15,28 @@ public struct CollapsiblePagerConfiguration {
     /// 横向分页配置。
     public var paging: CollapsiblePagerPagingConfiguration
 
-    /// Header 完全展开后继续下拉时的刷新移交语义。
-    public var refreshMode: CollapsiblePagerRefreshMode
+    /// Header 完全展开后，继续下拉手势的刷新 handoff 路由。
+    ///
+    /// 该配置只影响容器如何记录和协调 handoff，不决定业务是否安装刷新控件、
+    /// 使用哪种刷新控件，也不负责开始或结束刷新任务。默认值为 `.container`。
+    public var refreshHandoffMode: CollapsiblePagerRefreshHandoffMode
+
+    /// Header 区域向下拖拽时是否允许 child 自有刷新机制被拉出。
+    public var headerPullDownRefreshBehavior: CollapsiblePagerHeaderPullDownRefreshBehavior
 
     /// 创建配置。
     public init(
         header: CollapsiblePagerHeaderConfiguration = .default,
         tabBar: CollapsiblePagerTabBarConfiguration = .default,
         paging: CollapsiblePagerPagingConfiguration = .default,
-        refreshMode: CollapsiblePagerRefreshMode = .none
+        refreshHandoffMode: CollapsiblePagerRefreshHandoffMode = .container,
+        headerPullDownRefreshBehavior: CollapsiblePagerHeaderPullDownRefreshBehavior = .allowsChildRefresh
     ) {
         self.header = header
         self.tabBar = tabBar
         self.paging = paging
-        self.refreshMode = refreshMode
+        self.refreshHandoffMode = refreshHandoffMode
+        self.headerPullDownRefreshBehavior = headerPullDownRefreshBehavior
     }
 
     /// V1 默认配置。
@@ -196,14 +204,42 @@ public struct CollapsiblePagerPagingConfiguration: Sendable, Equatable {
     public static let `default` = CollapsiblePagerPagingConfiguration()
 }
 
-/// Header 完全展开后的刷新移交语义。
-public enum CollapsiblePagerRefreshMode: Sendable, Equatable {
-    /// 不移交刷新。
+/// Header 完全展开后，继续下拉手势的刷新 handoff 路由。
+///
+/// 该枚举描述的是“手势与滚动状态交给谁协调”，不是“刷新控件由谁创建”。
+/// 容器不会创建刷新 view、触发刷新回调或结束刷新任务；调用方可以选择不安装刷新机制，
+/// 也可以在对应的 scroll host 上安装自己的刷新机制。
+public enum CollapsiblePagerRefreshHandoffMode: Sendable, Equatable {
+    /// 不记录刷新 handoff。
+    ///
+    /// 当前 child 仍保留自身 `UIScrollView` 行为；如果业务已经在 child 上安装刷新控件，
+    /// 该刷新控件仍按自身规则工作，只是容器不把这次下拉记为刷新状态。
     case none
 
-    /// 移交给外部整体刷新机制。
-    case overall
+    /// 继续下拉路由到容器拥有的 `containerRefreshHostScrollView`。
+    ///
+    /// 适合整体刷新：业务可在该 host 上安装刷新机制。容器只提供外层纵向 handoff
+    /// 坐标系和手势边界，不假设具体刷新控件类型。
+    case container
 
-    /// 移交给当前 child 的外部刷新机制。
+    /// 继续下拉保留在当前 child 提供的 `pagerScrollView`。
+    ///
+    /// 适合局部刷新：业务可在每个 child 的 scroll view 上安装刷新机制。容器会记录当前
+    /// child handoff 以协调 Header、手势和横向分页，但不管理刷新任务本身。
     case child
+}
+
+/// Header 区域向下拖拽时的 child 刷新触发策略。
+///
+/// Header 展开且稳定在当前 child 中时，Header 视觉内容位于 child scroll view 的顶部占位区域。
+/// 该策略只决定从这块 Header 区域开始的向下拖拽是否允许 child scroll view 进入刷新 reveal；
+/// 内容列表区域、刷新控件安装和刷新任务生命周期仍由业务负责。
+public enum CollapsiblePagerHeaderPullDownRefreshBehavior: Sendable, Equatable {
+    /// 保持 UIKit 默认语义，Header 区域下拉可以带动当前 child scroll view。
+    case allowsChildRefresh
+
+    /// Header 区域下拉不触发 child 自有刷新 reveal。
+    ///
+    /// 该策略只拦截从 Header 区域开始的向下拖拽；从 child 内容区域开始的下拉刷新不受影响。
+    case suppressesChildRefresh
 }

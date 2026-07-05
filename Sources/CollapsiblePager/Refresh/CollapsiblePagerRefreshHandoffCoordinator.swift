@@ -1,12 +1,13 @@
 enum RefreshHandoff: Sendable, Equatable {
-    case externalScrollView(scope: CollapsiblePagerRefreshMode, index: Int)
+    case containerHost(index: Int)
+    case childScrollView(index: Int)
 }
 
 struct RefreshHandoffCoordinator: Sendable, Equatable {
-    var mode: CollapsiblePagerRefreshMode
+    var mode: CollapsiblePagerRefreshHandoffMode
     private(set) var activeHandoff: RefreshHandoff?
 
-    init(mode: CollapsiblePagerRefreshMode) {
+    init(mode: CollapsiblePagerRefreshHandoffMode) {
         self.mode = mode
     }
 
@@ -18,7 +19,15 @@ struct RefreshHandoffCoordinator: Sendable, Equatable {
             return nil
         }
 
-        let handoff = RefreshHandoff.externalScrollView(scope: mode, index: index)
+        let handoff: RefreshHandoff
+        switch mode {
+        case .none:
+            return nil
+        case .container:
+            handoff = .containerHost(index: index)
+        case .child:
+            handoff = .childScrollView(index: index)
+        }
         activeHandoff = handoff
         return handoff
     }

@@ -56,7 +56,7 @@ import Testing
     )
 
     #expect(transition.nextPinAnchorY == 120)
-    #expect(transition.contentOffsetCorrectionY == 40)
+    #expect(transition.contentOffsetCorrectionY == -40)
 }
 
 @Test func headerHeightTransitionPreservesCollapseProgress() {
@@ -68,7 +68,7 @@ import Testing
     )
 
     #expect(transition.nextPinAnchorY == 75)
-    #expect(transition.contentOffsetCorrectionY == 25)
+    #expect(transition.contentOffsetCorrectionY == -75)
 }
 
 @Test func headerHeightTransitionCanResetToExpandedOrCollapsed() {
@@ -86,7 +86,7 @@ import Testing
     )
 
     #expect(expanded.nextPinAnchorY == 0)
-    #expect(expanded.contentOffsetCorrectionY == -80)
+    #expect(expanded.contentOffsetCorrectionY == -180)
     #expect(collapsed.nextPinAnchorY == 300)
-    #expect(collapsed.contentOffsetCorrectionY == 220)
+    #expect(collapsed.contentOffsetCorrectionY == 120)
 }

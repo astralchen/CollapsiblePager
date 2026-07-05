@@ -25,7 +25,8 @@ import UIKit
     #expect(configuration.tabBar.height == 48)
     #expect(configuration.tabBar.placement == .belowHeader)
     #expect(configuration.tabBar.pinning == .pinBelowNavigationBar(offset: 0))
-    #expect(configuration.refreshMode == .none)
+    #expect(configuration.refreshHandoffMode == .container)
+    #expect(configuration.headerPullDownRefreshBehavior == .allowsChildRefresh)
     #expect(configuration.paging.allowsSwipeToChangePage)
     #expect(configuration.paging.bouncesHorizontally)
 }
@@ -41,4 +42,15 @@ import UIKit
     let provider: any CollapsiblePagerScrollProviding = child
 
     #expect(provider.pagerScrollView === child.scrollView)
+}
+
+@MainActor
+@Test func containerRefreshHostIsContainerOwnedVerticalScrollHost() {
+    let pager = CollapsiblePagerViewController()
+
+    let host = pager.containerRefreshHostScrollView
+
+    #expect(host.superview === pager.view)
+    #expect(host.alwaysBounceVertical)
+    #expect(host.alwaysBounceHorizontal == false)
 }
