@@ -666,6 +666,7 @@ Expected: ChildStoreTests 通过。
 - cancel 回滚到来源 index。
 - 空页和越界请求 no-op。
 - 快速连续请求合并到最后目标。
+- 被后续请求取代的旧 completion 不提交中间页；横向手势回到来源页才走 cancel。
 - PageContainer 支持按 index 创建、移除 page view，并暴露已加载 page index 供容器裁剪窗口。
 
 - [x] **Step 1: 写 pipeline 测试**
@@ -1189,7 +1190,7 @@ import UIKit
 
 - [x] **Step 4: 集成 selectPage**
 
-调用 PageRequestPipeline。TabBar item 点击使用 `.tabTap`，相邻页以 animated page scroll 过渡并在 PageContainer 完成后提交，child controller appearance lifecycle 同步以 `animated: true` 转发；非相邻页直接 source/target 定位并立即完成 request，child controller appearance lifecycle 以 `animated: false` 转发。公开 API 的相邻 animated selection 交给 PageContainer scroll 动画完成后提交；非相邻 programmatic selection 直接 set 到目标页并完成 request，避免滚过未加载的中间页。完成后统一通知 delegate、同步 TabBar、转发 child lifecycle，并按当前页裁剪 child window。新的 current child 需要按当前 `PinAnchor` 和 managed top inset 通过 guarded offset update 补齐不足，确保 Long 已吸顶后点击 Empty/Short 仍保持吸顶；已经滚得更深的 child 必须保留自己的列表位置，避免返回 Long 时跳回初始顶部位置。child window 卸载远离当前页的 controller 前保存 contentOffset snapshot；重新加载时如果内容尺寸暂时不足以恢复，保留 pending offset，并在 `contentSize` KVO 后重算 inset 再恢复。横向 PagePosition 处于交互或过渡 progress 时临时隐藏 loaded child 的 scroll indicators，稳定后恢复业务 child 原始配置。
+调用 PageRequestPipeline。TabBar item 点击使用 `.tabTap`，相邻页以 animated page scroll 过渡并在 PageContainer 完成后提交，child controller appearance lifecycle 同步以 `animated: true` 转发；非相邻页直接 source/target 定位并立即完成 request，child controller appearance lifecycle 以 `animated: false` 转发。公开 API 的相邻 animated selection 交给 PageContainer scroll 动画完成后提交；非相邻 programmatic selection 直接 set 到目标页并完成 request，避免滚过未加载的中间页。完成事件必须匹配当前 pending target 才能提交；快速连续 Tab/API 请求中，被新请求取代的旧 completion 只记录为 ignored，不触发 selected index 提交、child window 裁剪、page container 回滚或 offset 对齐。完成后统一通知 delegate、同步 TabBar、转发 child lifecycle，并按当前页裁剪 child window。新的 current child 需要按当前 `PinAnchor` 和 managed top inset 通过 guarded offset update 补齐不足，确保 Long 已吸顶后点击 Empty/Short 仍保持吸顶；已经滚得更深的 child 必须保留自己的列表位置，避免返回 Long 时跳回初始顶部位置。child window 卸载远离当前页的 controller 前保存 contentOffset snapshot；重新加载时如果内容尺寸暂时不足以恢复，保留 pending offset，并在 `contentSize` KVO 后重算 inset 再恢复。横向 PagePosition 处于交互或过渡 progress 时临时隐藏 loaded child 的 scroll indicators，稳定后恢复业务 child 原始配置。
 
 - [x] **Step 5: 运行测试**
 
@@ -3136,6 +3137,128 @@ xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'g
 ```
 
 Actual: 核心测试 exit code 0；Examples build-for-testing exit code 0。
+
+## 2026-07-06 Container child-owned 反向手势抖动修复
+
+用户继续提供 pull-down 日志并反馈“有点抖动”。关键日志形态：
+
+- `containerPan shouldBegin=false ... translation=(0.00,-1.67) velocity=(-60.48,-352.78)`，同一手势起始是向上滚动，外层 host pan 正确失败。
+- 后续 child pan 反向到顶部 overscroll，进入 `childProxy route`，但此时 `hostDidScroll ... panState=failed tracking=false/false/false`。
+- 同一 child tracking 手势内反复出现 `childProxy finishCheck`、`childProxy route` 和 idle host offset 更新，`proxyY` 在数 pt 范围内摆动。
+
+Root cause：`.container` 代理路径没有区分“host pan 未及时接管的下拉兜底”和“host pan 已在本次 child-owned 手势中明确拒绝接管”。当手势先向上滚动、再反向拉到顶部时，child pan 已经拥有本次手势，外层 host pan 处于 failed；继续启动 container proxy 会让 child top bounce 与 idle host 的程序化 offset 更新互相校正，表现为轻微抖动。
+
+调整：
+
+- 新增 `containerRefreshHostRejectedChildGestureIndex`，记录当前 child 已在顶部且 container host pan 因明确向上意图拒绝接管的页面。
+- 当同一 child tracking/dragging 手势后续进入顶部 overscroll，且没有 active `.containerHost` 或旧 proxy owner 时，只把 child clamp 回 managed top boundary，不启动 container proxy handoff。
+- host pan 重新成功接管、已有 handoff 继续、child pan 结束、reload/unload、proxy cancel/finish、业务刷新 inset 接管时清空该记录。
+- 新增回归测试 `rejectedContainerHostPanDoesNotStartProxyDuringSameChildGesture`。
+
+Red:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerJitterRedDerivedData test -quiet
+```
+
+Actual: `TEST FAILED`，新增测试失败，`pager.activeRefreshHandoffForTesting` 仍为 `.containerHost(index: 0)`，证明旧逻辑会在已被 host pan 拒绝的 child-owned 手势中启动 proxy。
+
+Verification:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerJitterGreenDerivedData test -quiet
+```
+
+Actual: 核心测试 exit code 0；Swift Testing summary 显示 104 个测试通过、0 失败。
+
+## 2026-07-06 长列表 contentSize 循环回跳修复
+
+用户继续反馈“循环显示，来回跳动”，并提供吸顶后的滚动日志。关键日志形态：
+
+- Header 已完全吸顶：`childProxy skipped reason=headerNotExpanded collapse=1.00`。
+- 没有 active refresh handoff，也没有 page transition。
+- 当前 child offset 在同一滚动过程中反复回到 `2068.67`，随后又继续增长到 `21xx...24xx`。
+
+Root cause：`contentSize` KVO 每次触发都会调用 `ChildStore.updateManagedInset`，而 `applyManagedInsets` 无条件重新写入 child `contentInset`、scroll indicator inset 和 adjustment 行为。UITableView 长列表在接近底部滚动时可能因为估算行高逐步修正 `contentSize`；重复写入相同 inset 会让 UIKit 反复执行 offset 校正，表现为内容被夹回旧最大 offset 后又继续滚动。
+
+调整：
+
+- `CollapsiblePagerChildStore.applyManagedInsets` 只在目标 `contentInset`、vertical scroll indicator inset 或 adjustment 行为实际变化时写回 `UIScrollView`。
+- 新增回归测试 `childStoreDoesNotRewriteUnchangedContentInsetAfterContentSizeChanges`，锁住长内容 contentSize 变化但 managed inset 不变时的 no-op 行为。
+- 保留短内容/空内容的 bottom inset 重算能力；当目标 inset 真的变化时仍会写回，确保短页可以滚到吸顶阈值。
+
+Red:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerInsetNoopRedDerivedData test -quiet
+```
+
+Actual: `TEST FAILED`，新增测试失败在 `childStoreDoesNotRewriteUnchangedContentInsetAfterContentSizeChanges()`，证明旧实现会重复写入相同 content inset。
+
+Verification:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerInsetNoopGreenDerivedData test -quiet
+```
+
+Actual: 核心测试 exit code 0。
+
+## 2026-07-06 快速连续 Tab completion 过期回调修复
+
+用户继续提供“后面的日志”，反馈内容循环显示、来回跳动。关键日志形态：
+
+- `tabTap index=1` 后还在相邻页 animated scroll 过程中，又收到 `tabTap index=2`。
+- 新请求已经把 `pendingSelectedIndex` 改成最终目标，但旧动画 completion 仍回调旧目标。
+- 旧 completion 先把 `selectedIndex/effectiveSelectedIndex` 临时提交到中间页，随后最终目标又完成；后续 Long 页的 preserved offset 与 child window 恢复反复运行，表现为数据在旧 offset 和新 offset 之间来回跳动。
+
+Root cause：`PageRequestPipeline.complete(targetIndex:)` 不校验 completion 是否匹配当前 pending target；`CollapsiblePagerViewController.completePageTransition(targetIndex:)` 也无条件执行后续副作用，包括同步 public selection、裁剪 child window、对齐 offset 和结束 child appearance transition。快速连续请求下，过期 completion 会短暂成为“真实完成”。
+
+调整：
+
+- `PageRequestPipeline.complete(targetIndex:)` 返回 `committed/cancelled/ignored`；只有 target 等于当前 `pendingSelectedIndex` 才提交。
+- completion target 等于当前 effective selection 且存在 pending target 时视为横向手势取消；其他 mismatch 是过期 completion，保持 pending target。
+- 容器只在 committed/cancelled 时执行 selection 同步、child window 裁剪、offset 对齐和 delegate 通知；ignored 不做 UI 回滚。
+- 新 page request 到来时，如果已有 child appearance transition 指向旧目标，先按来源页取消旧 transition，再开启新目标 transition，避免旧目标 lifecycle 泄漏到新请求。
+- 新增回归测试 `staleTransitionCompletionDoesNotCommitSupersededTarget` 和 `supersededAnimatedPageCompletionDoesNotCommitIntermediatePage`。
+
+Red:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerStaleCompletionRedDerivedData test -quiet
+```
+
+Actual: `TEST FAILED`，新增状态机测试和容器测试均失败，证明旧 completion 会提交中间页。
+
+Verification:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerStaleCompletionGreenDerivedData test -quiet
+```
+
+Actual: 核心测试 exit code 0。
+
+## 2026-07-06 Refresh Handoff mode menu 层级崩溃修复
+
+用户提供 `Refresh Handoff` 验证页从 `None` 切换到 `Container` 时的崩溃堆栈。崩溃发生在导航栏 menu action 触发 `DemoRefreshHandoffModeViewController.selectMode(at:)`，重新把已加载过的 offscreen pager view 加回 `pagerContainerView` 时，UIKit 在 `_associatedViewControllerForwardsAppearanceCallbacks` 的层级校验中触发异常。
+
+Root cause：验证页预先创建并 `reloadData()` 三个 pager。Header 已改为 `UIViewController` 后，`CollapsiblePager` 会在展开稳定态把同一个 Header controller 的 view 迁移到当前 child 的 `HeaderMountView`。offscreen pager 已加载但未处于当前父子层级时，其 Header view 可能仍位于 child scroll view 子树中；后续再把该 pager view 加回窗口层级，会让 UIKit 看到 header controller view 位于 sibling child controller 子树内，从而拒绝自动 appearance forwarding 的层级检查。
+
+调整：
+
+- `DemoRefreshHandoffModeViewController` 不再预加载并复用三个 pager 实例。
+- mode menu 每次选择时移除当前 pager，并为目标 mode 创建新的 `CollapsiblePagerViewController` 与对应 data source。
+- 新 pager 先完成标准 child containment，再调用 `reloadData()`，避免 offscreen 已加载 pager 携带旧 Header mount 子树重新入场。
+- menu 和 fallback alert 的选择动作延后一轮主队列执行，避开 UIKit menu action 正在提交 presentation 层级变化的时机。
+
+Verification:
+
+```sh
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerRefreshMenuUIGreen3DerivedData -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -only-testing:ExamplesUITests/ExamplesUITests/testRefreshHandoffTabSwitchesAllModes test
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerExamplesTestsDerivedData -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -only-testing:ExamplesTests test
+git diff --check
+```
+
+Actual: 定向 UI test 通过，覆盖从 `.none` 依次切换到 `.container` 和 `.child`；Examples Swift Testing 实际执行 4 个测试并通过；`git diff --check` 无输出。
 
 ## 执行策略
 

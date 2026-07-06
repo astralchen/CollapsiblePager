@@ -177,7 +177,7 @@ final class DemoRefreshHandoffModeViewController: UIViewController {
     private static let modes: [CollapsiblePagerRefreshHandoffMode] = [.none, .container, .child]
 
     private let pagerContainerView = UIView()
-    private var entries: [ModeEntry] = []
+    private var currentEntry: ModeEntry?
     private var currentEntryIndex: Int?
 
     var availableRefreshHandoffModesForTesting: [CollapsiblePagerRefreshHandoffMode] {
@@ -185,10 +185,7 @@ final class DemoRefreshHandoffModeViewController: UIViewController {
     }
 
     var currentPagerForTesting: CollapsiblePagerViewController? {
-        guard let currentEntryIndex else {
-            return nil
-        }
-        return entries[currentEntryIndex].pager
+        currentEntry?.pager
     }
 
     init() {
@@ -204,18 +201,21 @@ final class DemoRefreshHandoffModeViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         configureView()
-        configureModeEntriesIfNeeded()
         selectMode(at: 0)
     }
 
     func pagerForTesting(mode: CollapsiblePagerRefreshHandoffMode) -> CollapsiblePagerViewController? {
-        configureModeEntriesIfNeeded()
-        return entries.first { $0.mode == mode }?.pager
+        guard currentEntry?.mode == mode else {
+            return nil
+        }
+        return currentEntry?.pager
     }
 
     func dataSourceForTesting(mode: CollapsiblePagerRefreshHandoffMode) -> DemoRefreshHandoffModeDataSource? {
-        configureModeEntriesIfNeeded()
-        return entries.first { $0.mode == mode }?.dataSource
+        guard currentEntry?.mode == mode else {
+            return nil
+        }
+        return currentEntry?.dataSource
     }
 
     func selectRefreshHandoffModeForTesting(_ mode: CollapsiblePagerRefreshHandoffMode) {
@@ -275,7 +275,7 @@ final class DemoRefreshHandoffModeViewController: UIViewController {
                 title: mode.demoTitle,
                 state: index == selectedIndex ? .on : .off
             ) { [weak self] _ in
-                self?.selectMode(at: index)
+                self?.scheduleModeSelection(at: index)
             }
         }
 
@@ -287,7 +287,7 @@ final class DemoRefreshHandoffModeViewController: UIViewController {
 
         for (index, mode) in Self.modes.enumerated() {
             alert.addAction(UIAlertAction(title: mode.demoTitle, style: .default) { [weak self] _ in
-                self?.selectMode(at: index)
+                self?.scheduleModeSelection(at: index)
             })
         }
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
@@ -296,45 +296,44 @@ final class DemoRefreshHandoffModeViewController: UIViewController {
         present(alert, animated: true)
     }
 
-    private func configureModeEntriesIfNeeded() {
-        guard entries.isEmpty else {
-            return
-        }
-
-        entries = Self.modes.map { mode in
-            let dataSource = DemoRefreshHandoffModeDataSource(mode: mode)
-            var configuration = CollapsiblePagerConfiguration.default
-            configuration.refreshHandoffMode = mode
-            if mode == .child {
-                configuration.headerPullDownRefreshBehavior = .suppressesChildRefresh
-            }
-            let pager = CollapsiblePagerViewController(configuration: configuration)
-            pager.dataSource = dataSource
-            pager.delegate = dataSource
-            pager.view.accessibilityIdentifier = "refresh-mode-\(mode.demoIdentifier)-pager"
-            dataSource.headerView.onReloadLayout = { [weak pager] in
-                pager?.reloadHeaderLayout(offsetPolicy: .preserveVisualPosition)
-            }
-            dataSource.configureRefreshHost(for: pager)
-            pager.reloadData()
-            return ModeEntry(mode: mode, dataSource: dataSource, pager: pager)
+    private func scheduleModeSelection(at index: Int) {
+        DispatchQueue.main.async { [weak self] in
+            self?.selectMode(at: index)
         }
     }
 
+    private func makeModeEntry(for mode: CollapsiblePagerRefreshHandoffMode) -> ModeEntry {
+        let dataSource = DemoRefreshHandoffModeDataSource(mode: mode)
+        var configuration = CollapsiblePagerConfiguration.default
+        configuration.refreshHandoffMode = mode
+        if mode == .child {
+            configuration.headerPullDownRefreshBehavior = .suppressesChildRefresh
+        }
+        let pager = CollapsiblePagerViewController(configuration: configuration)
+        pager.dataSource = dataSource
+        pager.delegate = dataSource
+        pager.view.accessibilityIdentifier = "refresh-mode-\(mode.demoIdentifier)-pager"
+        dataSource.headerView.onReloadLayout = { [weak pager] in
+            pager?.reloadHeaderLayout(offsetPolicy: .preserveVisualPosition)
+        }
+        dataSource.configureRefreshHost(for: pager)
+        return ModeEntry(mode: mode, dataSource: dataSource, pager: pager)
+    }
+
     private func selectMode(at index: Int) {
-        guard entries.indices.contains(index),
+        guard Self.modes.indices.contains(index),
               currentEntryIndex != index else {
             return
         }
 
-        if let currentEntryIndex {
-            let currentPager = entries[currentEntryIndex].pager
+        if let currentEntry {
+            let currentPager = currentEntry.pager
             currentPager.willMove(toParent: nil)
             currentPager.view.removeFromSuperview()
             currentPager.removeFromParent()
         }
 
-        let entry = entries[index]
+        let entry = makeModeEntry(for: Self.modes[index])
         addChild(entry.pager)
         pagerContainerView.addSubview(entry.pager.view)
         entry.pager.view.translatesAutoresizingMaskIntoConstraints = false
@@ -345,6 +344,8 @@ final class DemoRefreshHandoffModeViewController: UIViewController {
             entry.pager.view.bottomAnchor.constraint(equalTo: pagerContainerView.bottomAnchor),
         ])
         entry.pager.didMove(toParent: self)
+        entry.pager.reloadData()
+        currentEntry = entry
         currentEntryIndex = index
         navigationItem.rightBarButtonItem = makeModeMenuBarButtonItem(selectedIndex: index)
     }

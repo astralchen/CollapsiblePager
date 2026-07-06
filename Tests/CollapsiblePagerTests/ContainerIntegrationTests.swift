@@ -88,6 +88,36 @@ import UIKit
 }
 
 @MainActor
+@Test func supersededAnimatedPageCompletionDoesNotCommitIntermediatePage() {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    let delegate = SelectionRecorder()
+    pager.dataSource = dataSource
+    pager.delegate = delegate
+    pager.reloadData()
+
+    pager.selectPage(at: 1, animated: false)
+    pager.tapTabItemForTesting(at: 0)
+    pager.tapTabItemForTesting(at: 2)
+
+    #expect(pager.selectedIndex == 1)
+    #expect(pager.effectiveSelectedIndex == 1)
+    #expect(delegate.selectedIndexes == [1])
+
+    pager.completePendingPageTransitionForTesting(targetIndex: 0)
+
+    #expect(pager.selectedIndex == 1)
+    #expect(pager.effectiveSelectedIndex == 1)
+    #expect(delegate.selectedIndexes == [1])
+
+    pager.completePendingPageTransitionForTesting(targetIndex: 2)
+
+    #expect(pager.selectedIndex == 2)
+    #expect(pager.effectiveSelectedIndex == 2)
+    #expect(delegate.selectedIndexes == [1, 2])
+}
+
+@MainActor
 @Test func pageWindowPrunesVisitedControllersOutsideCurrentNeighborhood() {
     let pager = CollapsiblePagerViewController()
     let dataSource = DemoDataSource(pageCount: 6)
@@ -720,7 +750,7 @@ import UIKit
     var configuration = CollapsiblePagerConfiguration.default
     configuration.refreshHandoffMode = .container
     let pager = CollapsiblePagerViewController(configuration: configuration)
-    let dataSource = DemoDataSource(pageCount: 1)
+    let dataSource = TrackingDataSource()
     pager.dataSource = dataSource
     pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
 
@@ -728,8 +758,10 @@ import UIKit
     pager.view.layoutIfNeeded()
     let initialHeaderFrame = pager.headerFrameForTesting
 
-    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let scrollView = try #require(dataSource.child(at: 0)?.trackingScrollView)
     scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.simulatedTracking = true
+    scrollView.simulatedDragging = true
     scrollView.setContentOffset(CGPoint(x: 0, y: -330), animated: false)
     pager.view.layoutIfNeeded()
 
@@ -804,18 +836,20 @@ import UIKit
     var configuration = CollapsiblePagerConfiguration.default
     configuration.refreshHandoffMode = .container
     let pager = CollapsiblePagerViewController(configuration: configuration)
-    let dataSource = DemoDataSource(pageCount: 1)
+    let dataSource = TrackingDataSource()
     pager.dataSource = dataSource
     pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
 
     pager.reloadData()
     pager.view.layoutIfNeeded()
 
-    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let scrollView = try #require(dataSource.child(at: 0)?.trackingScrollView)
     let host = try #require(
         pager.containerRefreshHostScrollViewForTesting as? CollapsiblePagerContainerRefreshHostScrollView
     )
     scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.simulatedTracking = true
+    scrollView.simulatedDragging = true
 
     scrollView.setContentOffset(CGPoint(x: 0, y: -305), animated: false)
     pager.view.layoutIfNeeded()
@@ -869,6 +903,69 @@ import UIKit
     #expect(pager.activeRefreshHandoffForTesting == nil)
     #expect(host.contentOffset.y == 0)
     #expect(pager.headerHostSuperviewForTesting === mountView)
+}
+
+@MainActor
+@Test func rejectedContainerHostPanDoesNotStartProxyDuringSameChildGesture() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = TrackingDataSource()
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(dataSource.child(at: 0)?.trackingScrollView)
+    let host = try #require(
+        pager.containerRefreshHostScrollViewForTesting as? CollapsiblePagerContainerRefreshHostScrollView
+    )
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.simulatedTracking = true
+    scrollView.simulatedDragging = true
+
+    #expect(
+        pager.shouldBeginContainerRefreshHostPanForTesting(
+            translation: CGSize(width: 0, height: -2),
+            velocity: CGSize(width: 0, height: -320)
+        ) == false
+    )
+
+    scrollView.setContentOffset(CGPoint(x: 0, y: -330), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.activeRefreshHandoffForTesting == nil)
+    #expect(try containerRefreshProxyOverscrollOffsetY(in: pager) == 0)
+    #expect(host.contentOffset.y == host.neutralBaselineContentOffsetY)
+    #expect(scrollView.contentOffset.y == -308)
+}
+
+@MainActor
+@Test func idleChildOverscrollDoesNotStartContainerProxyHandoff() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = TrackingDataSource()
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(dataSource.child(at: 0)?.trackingScrollView)
+    let host = try #require(
+        pager.containerRefreshHostScrollViewForTesting as? CollapsiblePagerContainerRefreshHostScrollView
+    )
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+
+    scrollView.setContentOffset(CGPoint(x: 0, y: -330), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.activeRefreshHandoffForTesting == nil)
+    #expect(try containerRefreshProxyOverscrollOffsetY(in: pager) == 0)
+    #expect(host.contentOffset.y == host.neutralBaselineContentOffsetY)
+    #expect(scrollView.contentOffset.y == -308)
 }
 
 @MainActor

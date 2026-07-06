@@ -304,6 +304,7 @@ Header frame 的顶部由 `CollapsiblePagerHeaderTopBehavior` 决定。默认 `.
 - 设置 content inset、scroll indicator inset、contentInsetAdjustmentBehavior。
 - Pager 接管 child scroll view 后，vertical scroll indicator 的 top/bottom inset 由当前 layout 输出管理；bottom 使用安全区/布局 bottom inset，不保留接管前可能由 UIKit 自动调整产生的旧值，并关闭 `automaticallyAdjustsScrollIndicatorInsets` 避免 UIKit 再追加 safe area 或 bar 避让。
 - 短内容或空内容 child 按当前 viewport、contentSize、managed top inset 和 pin threshold 计算 bottom inset 补偿，确保真实内容不足一屏时仍可滚到吸顶阈值。
+- `contentSize` 变化触发 managed inset 重算时，只在目标 `contentInset`、scroll indicator inset 或 adjustment 行为实际变化时写回 `UIScrollView`；长列表滚动中由 UITableView 估算高度产生的 contentSize 微调不能反复重写相同 inset，避免底部滚动被 UIKit 夹回旧边界。
 - 创建时按当前 pin anchor 校准初始 contentOffset。
 - 切页提交后，新的 current child 如果低于当前 pin anchor 所需 offset，必须通过 guarded update 补齐；如果已经滚得更深，保留该 child 自己的列表位置。
 - child window 裁剪卸载 controller 前必须保存该 index 的 contentOffset snapshot。重新加载时如果内容尺寸暂时不足以恢复，offset 恢复保持 pending，并在后续 `contentSize` 变化、managed inset 重算后继续尝试。
@@ -357,9 +358,10 @@ struct PageRequest: Sendable {
 3. 建立 pending selection。
 4. 驱动 PageContainer；相邻动画切换使用 paging scroll 动画，非相邻 programmatic 跳转直接设置目标页并完成。
 5. 输出 PagePosition 给 TabBar/indicator。
-6. 完成时提交 `selectedIndex`。
+6. 完成事件必须匹配当前 `pendingSelectedIndex` 才提交 `selectedIndex`。
 7. 完成后按当前页裁剪 child window，只保留当前页和相邻页。
-8. 取消时回滚 pending selection 和 indicator。
+8. 横向手势回到来源页时取消并回滚 pending selection 和 indicator。
+9. 被后续请求取代的旧动画完成回调是 no-op，不得提交中间页、裁剪 child window、重放旧 offset 或结束到旧目标的 child appearance transition。
 
 ### 8.9 TabBarController
 
@@ -396,6 +398,7 @@ enum RefreshHandoff: Sendable, Equatable {
 - Header 完全展开且当前 child 在顶部后，继续下拉才允许外部刷新 reveal。
 - 同一次下拉手势最多移交一次。
 - `.container` 交给容器拥有的外层纵向 refresh host。
+- `.container` 下，若当前 child 已在顶部且外层 refresh host pan 因明确向上意图拒绝接管，后续同一手势反向进入顶部 overscroll 时不再启动 container proxy handoff，只把 child 保持在 managed top boundary，下一次符合条件的下拉手势重新竞争 owner。
 - `.child` 交给当前 child 提供的 `pagerScrollView`。
 - `.child` 没有刷新控件时，不降级触发 `.container`。
 - 核心不提供 `endRefreshing()`。
@@ -479,6 +482,7 @@ struct PagePosition: Sendable, Equatable {
 - animated 为 false 时也经过同一提交路径，只是 PageContainer 立即定位。
 - 横向 scroll 动画只用于相邻页面切换；非相邻切换采用 direct source/target 立即定位，不滚过中间页。
 - TabBar item 点击内部使用 `.tabTap` 请求；相邻页允许横向 scroll 动画且 child controller appearance transition 使用 `animated = true`，非相邻页直接定位且 child controller appearance transition 使用 `animated = false`。
+- 快速连续 Tab/API 请求以最后一个 pending target 为准；旧请求的完成回调如果不再匹配 pending target，容器必须忽略该回调，不能把 `selectedIndex` 临时切到中间页。
 
 ### 10.3 Header 布局刷新
 
@@ -508,6 +512,7 @@ reload 期间会同步修正 loaded child 和已卸载 child 的 preserved offse
 
 - 完成则提交目标 selected index。
 - 取消则回滚到来源 selected index。
+- 过期的完成回调不属于完成或取消；它只记录为 ignored，不触发 page container 回滚、child window 裁剪或 offset 对齐。
 - 目标 child 加载并成为 current child。
 - 非相邻 programmatic 跳转不滚过中间页，完成后只保留目标页邻域 child window。
 - 目标 child 按当前 `PinAnchor` 与 managed top inset 做 guarded contentOffset 补齐；Long 已吸顶后点击 Short/Empty 不应瞬间退出吸顶，回到已深度滚动但曾被 child window 卸载的 Long 时也不应重置到初始顶部位置。

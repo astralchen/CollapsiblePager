@@ -57,3 +57,17 @@ import Testing
     #expect(state.selectedIndex == 3)
     #expect(state.pendingSelectedIndex == nil)
 }
+
+@Test func staleTransitionCompletionDoesNotCommitSupersededTarget() {
+    var state = CollapsiblePagerState.initial(pageCount: 3)
+    let pipeline = PageRequestPipeline()
+
+    #expect(pipeline.request(.init(source: .tabTap, fromIndex: 0, targetIndex: 1, animated: true), state: &state))
+    #expect(pipeline.request(.init(source: .tabTap, fromIndex: 0, targetIndex: 2, animated: true), state: &state))
+
+    pipeline.complete(targetIndex: 1, state: &state)
+
+    #expect(state.selectedIndex == 0)
+    #expect(state.effectiveSelectedIndex == 0)
+    #expect(state.pendingSelectedIndex == 2)
+}

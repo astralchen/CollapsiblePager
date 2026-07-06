@@ -27,6 +27,7 @@ open class CollapsiblePagerViewController: UIViewController {
             if previousRefreshHandoffMode != configuration.refreshHandoffMode {
                 refreshHandoffCoordinator.resetGesture()
                 containerRefreshProxyOverscrollOffsetY = 0
+                containerRefreshHostRejectedChildGestureIndex = nil
                 containerRefreshHostScrollViewStorage.resetOffsetIfIdle()
             }
             tabBarView.apply(configuration: configuration.tabBar)
@@ -89,6 +90,7 @@ open class CollapsiblePagerViewController: UIViewController {
     private var containerRefreshHostPriorityChildIndexes: Set<Int> = []
     private var headerPullDownGatePriorityChildIndexes: Set<Int> = []
     private var containerRefreshProxyOverscrollOffsetY: CGFloat = 0
+    private var containerRefreshHostRejectedChildGestureIndex: Int?
     private let loadedChildWindowRadius = 1
 
     /// 创建容器。
@@ -159,6 +161,7 @@ open class CollapsiblePagerViewController: UIViewController {
         refreshHandoffCoordinator.mode = configuration.refreshHandoffMode
         refreshHandoffCoordinator.resetGesture()
         containerRefreshProxyOverscrollOffsetY = 0
+        containerRefreshHostRejectedChildGestureIndex = nil
         containerRefreshHostScrollViewStorage.resetOffsetIfIdle()
         preservedContentOffsetYByIndex.removeAll()
         pageContainer.removeAllPageViews()
@@ -224,7 +227,7 @@ open class CollapsiblePagerViewController: UIViewController {
 
         tabBarView.update(position: state.pagePosition)
         _ = loadChildIfNeeded(at: index)
-        beginPageAppearanceTransition(
+        beginPageAppearanceTransitionForNewRequest(
             to: index,
             animated: shouldAnimateChildAppearanceTransition(
                 source: source,
@@ -563,6 +566,7 @@ open class CollapsiblePagerViewController: UIViewController {
         scrollObservations.removeAll()
         containerRefreshHostPriorityChildIndexes.removeAll()
         headerPullDownGatePriorityChildIndexes.removeAll()
+        containerRefreshHostRejectedChildGestureIndex = nil
         for record in loadedChildRecords.values {
             removeChildPanInteractionEndObservation(for: record)
             childStore.detach(record)
@@ -580,6 +584,9 @@ open class CollapsiblePagerViewController: UIViewController {
         scrollObservations[index] = nil
         containerRefreshHostPriorityChildIndexes.remove(index)
         headerPullDownGatePriorityChildIndexes.remove(index)
+        if containerRefreshHostRejectedChildGestureIndex == index {
+            containerRefreshHostRejectedChildGestureIndex = nil
+        }
         removeChildPanInteractionEndObservation(for: record)
         preservedContentOffsetYByIndex[index] = record.scrollView.contentOffset.y
         childStore.detach(record)
@@ -606,27 +613,34 @@ open class CollapsiblePagerViewController: UIViewController {
     }
 
     private func completePageTransition(targetIndex: Int) {
-        let shouldNotifySelection = state.pendingSelectedIndex == targetIndex
         debugPagingLog(
-            "transitionComplete begin target=\(targetIndex) shouldNotify=\(shouldNotifySelection) \(debugPagingState()) position=\(debugPagePosition(state.pagePosition))"
+            "transitionComplete begin target=\(targetIndex) \(debugPagingState()) position=\(debugPagePosition(state.pagePosition))"
         )
 
-        pageRequestPipeline.complete(targetIndex: targetIndex, state: &state)
+        let completionResult = pageRequestPipeline.complete(targetIndex: targetIndex, state: &state)
+        guard completionResult != .ignored, let completedIndex = state.effectiveSelectedIndex else {
+            debugPagingLog(
+                "transitionComplete ignored target=\(targetIndex) result=\(completionResult) \(debugPagingState()) position=\(debugPagePosition(state.pagePosition))"
+            )
+            return
+        }
+
+        let shouldNotifySelection = completionResult == .committed
         syncPublicSelectionFromState()
         tabBarView.update(position: state.pagePosition)
-        _ = loadChildIfNeeded(at: targetIndex)
-        finishPageAppearanceTransition(completedIndex: targetIndex)
-        pageContainer.scrollToPage(at: targetIndex, animated: false)
+        _ = loadChildIfNeeded(at: completedIndex)
+        finishPageAppearanceTransition(completedIndex: completedIndex)
+        pageContainer.scrollToPage(at: completedIndex, animated: false)
         updateLoadedChildWindowIfNeeded()
         alignCurrentChildOffsetToPinAnchor()
         updateChildScrollIndicatorSuppression(false)
         updateHeaderHostPlacement(reason: .currentChild)
 
         debugPagingLog(
-            "transitionComplete end target=\(targetIndex) notified=\(shouldNotifySelection && state.effectiveSelectedIndex == targetIndex) \(debugPagingState()) position=\(debugPagePosition(state.pagePosition))"
+            "transitionComplete end target=\(targetIndex) result=\(completionResult) completed=\(completedIndex) notified=\(shouldNotifySelection && state.effectiveSelectedIndex == completedIndex) \(debugPagingState()) position=\(debugPagePosition(state.pagePosition))"
         )
-        if shouldNotifySelection, state.effectiveSelectedIndex == targetIndex {
-            delegate?.pagerViewController(self, didSelectPageAt: targetIndex)
+        if shouldNotifySelection, state.effectiveSelectedIndex == completedIndex {
+            delegate?.pagerViewController(self, didSelectPageAt: completedIndex)
         }
     }
 
@@ -738,6 +752,9 @@ open class CollapsiblePagerViewController: UIViewController {
         }
 
         finishProxiedContainerRefreshHandoffIfPossible(sourceScrollView: record.scrollView)
+        if containerRefreshHostRejectedChildGestureIndex == record.index {
+            containerRefreshHostRejectedChildGestureIndex = nil
+        }
     }
 
     private func prioritizeContainerRefreshHostPan(over record: CollapsiblePagerChildRecord) {
@@ -1117,6 +1134,15 @@ open class CollapsiblePagerViewController: UIViewController {
             hasActiveContainerOverscroll ||
             (isVerticalPullDown && hasDownwardVelocity)
         )
+        if shouldBegin {
+            if containerRefreshHostRejectedChildGestureIndex == currentIndex {
+                containerRefreshHostRejectedChildGestureIndex = nil
+            }
+        } else if childIsAtTop,
+                  !hasActiveContainerOverscroll,
+                  isVerticalPullUpIntent(translation: translation, velocity: velocity) {
+            containerRefreshHostRejectedChildGestureIndex = currentIndex
+        }
         debugPullDownLog(
             "containerPan shouldBegin=\(shouldBegin) region=\(region) location=\(debugPoint(location)) translation=(\(debugNumber(translation.width)),\(debugNumber(translation.height))) velocity=(\(debugNumber(velocity.width)),\(debugNumber(velocity.height))) childOffsetY=\(debugNumber(record.scrollView.contentOffset.y)) boundaryY=\(debugNumber(managedTopBoundary)) hostOffsetY=\(debugNumber(containerRefreshHostScrollViewStorage.contentOffset.y)) hostBaselineY=\(debugNumber(hostBaselineY)) proxyY=\(debugNumber(containerRefreshProxyOverscrollOffsetY)) ownerContinuation=\(hasActiveContainerOverscroll) activeHandoff=\(String(describing: refreshHandoffCoordinator.activeHandoff))"
         )
@@ -1179,6 +1205,15 @@ open class CollapsiblePagerViewController: UIViewController {
         return velocity.height > 0 && abs(velocity.height) >= abs(velocity.width)
     }
 
+    private func isVerticalPullUpIntent(translation: CGSize, velocity: CGSize) -> Bool {
+        let translationMagnitude = max(abs(translation.width), abs(translation.height))
+        if translationMagnitude >= 0.5 {
+            return translation.height < 0 && abs(translation.height) >= abs(translation.width)
+        }
+
+        return velocity.height < 0 && abs(velocity.height) >= abs(velocity.width)
+    }
+
     private func beginContainerRefreshHandoffFromHostIfNeeded(adoptingProxyOverscroll: Bool = false) {
         guard configuration.refreshHandoffMode == .container,
               let index = state.effectiveSelectedIndex,
@@ -1189,6 +1224,7 @@ open class CollapsiblePagerViewController: UIViewController {
         }
 
         if refreshHandoffCoordinator.activeHandoff == .containerHost(index: index) {
+            containerRefreshHostRejectedChildGestureIndex = nil
             if adoptingProxyOverscroll && containerRefreshProxyOverscrollOffsetY < 0 {
                 debugPullDownLog(
                     "containerHandoff adoptProxy index=\(index) hostOffsetY=\(debugNumber(containerRefreshHostScrollViewStorage.contentOffset.y)) proxyY=\(debugNumber(containerRefreshProxyOverscrollOffsetY))"
@@ -1212,6 +1248,7 @@ open class CollapsiblePagerViewController: UIViewController {
             "containerHandoff tryBegin result=\(String(describing: handoff)) index=\(index) collapse=\(debugNumber(output.collapseProgress)) childOffsetY=\(debugNumber(record.scrollView.contentOffset.y)) boundaryY=\(debugNumber(managedTopBoundary)) hostOffsetY=\(debugNumber(containerRefreshHostScrollViewStorage.contentOffset.y)) proxyY=\(debugNumber(containerRefreshProxyOverscrollOffsetY))"
         )
         if handoff != nil {
+            containerRefreshHostRejectedChildGestureIndex = nil
             updateHeaderHostPlacement(reason: .refresh)
         }
     }
@@ -1333,6 +1370,22 @@ open class CollapsiblePagerViewController: UIViewController {
             return
         }
 
+        if shouldKeepChildOwnedPanAtTopBoundary(index: index, scrollView: scrollView) {
+            debugPullDownLog(
+                "childProxy skipped reason=containerPanRejected index=\(index) childOffsetY=\(debugNumber(scrollView.contentOffset.y)) boundaryY=\(debugNumber(managedTopBoundary))"
+            )
+            verticalScrollCoordinator.setContentOffsetY(managedTopBoundary, for: scrollView)
+            return
+        }
+
+        if shouldKeepIdleChildOverscrollAtTopBoundary(scrollView: scrollView) {
+            debugPullDownLog(
+                "childProxy skipped reason=idleChildOverscroll childOffsetY=\(debugNumber(scrollView.contentOffset.y)) boundaryY=\(debugNumber(managedTopBoundary))"
+            )
+            verticalScrollCoordinator.setContentOffsetY(managedTopBoundary, for: scrollView)
+            return
+        }
+
         let hostOffsetY = scrollView.contentOffset.y - managedTopBoundary
         containerRefreshProxyOverscrollOffsetY = min(0, hostOffsetY)
         verticalScrollCoordinator.setContentOffsetY(managedTopBoundary, for: scrollView)
@@ -1352,6 +1405,36 @@ open class CollapsiblePagerViewController: UIViewController {
         }
 
         containerRefreshHostScrollViewStorage.setRefreshOverscrollOffsetY(hostOffsetY)
+    }
+
+    private func shouldKeepChildOwnedPanAtTopBoundary(index: Int, scrollView: UIScrollView) -> Bool {
+        guard containerRefreshHostRejectedChildGestureIndex == index,
+              refreshHandoffCoordinator.activeHandoff == nil,
+              containerRefreshProxyOverscrollOffsetY >= 0,
+              scrollView.isTracking || scrollView.isDragging else {
+            return false
+        }
+
+        // 同一 child 手势中 container pan 已拒绝接管时，不再中途开启 proxy handoff。
+        // 否则 child 的 top bounce 会和 idle host 的程序化 offset 更新互相校正。
+        return true
+    }
+
+    private func shouldKeepIdleChildOverscrollAtTopBoundary(scrollView: UIScrollView) -> Bool {
+        guard refreshHandoffCoordinator.activeHandoff == nil,
+              containerRefreshProxyOverscrollOffsetY >= 0,
+              !scrollView.isTracking,
+              !scrollView.isDragging,
+              !scrollView.isDecelerating,
+              !containerRefreshHostScrollViewStorage.isTracking,
+              !containerRefreshHostScrollViewStorage.isDragging,
+              !containerRefreshHostScrollViewStorage.isDecelerating else {
+            return false
+        }
+
+        // 空闲或程序性 child offset 回调不代表新的下拉刷新手势。
+        // 只夹回 managed top boundary，避免创建孤立的 container proxy。
+        return true
     }
 
     @discardableResult
@@ -1385,6 +1468,7 @@ open class CollapsiblePagerViewController: UIViewController {
         )
         refreshHandoffCoordinator.resetGesture()
         containerRefreshProxyOverscrollOffsetY = 0
+        containerRefreshHostRejectedChildGestureIndex = nil
         containerRefreshHostScrollViewStorage.setContentOffset(
             CGPoint(x: 0, y: containerRefreshHostScrollViewStorage.neutralBaselineContentOffsetY),
             animated: false
@@ -1427,6 +1511,7 @@ open class CollapsiblePagerViewController: UIViewController {
         )
         refreshHandoffCoordinator.resetGesture()
         containerRefreshProxyOverscrollOffsetY = 0
+        containerRefreshHostRejectedChildGestureIndex = nil
         containerRefreshHostScrollViewStorage.setContentOffset(
             CGPoint(x: 0, y: containerRefreshHostScrollViewStorage.neutralBaselineContentOffsetY),
             animated: false
@@ -1450,6 +1535,7 @@ open class CollapsiblePagerViewController: UIViewController {
         )
         refreshHandoffCoordinator.resetGesture()
         containerRefreshProxyOverscrollOffsetY = 0
+        containerRefreshHostRejectedChildGestureIndex = nil
         updateHeaderHostPlacement(reason: .currentChild)
     }
 
@@ -1500,6 +1586,7 @@ open class CollapsiblePagerViewController: UIViewController {
             "childProxy releaseProxyToExternalInset hostOffsetY=\(debugNumber(containerRefreshHostScrollViewStorage.contentOffset.y)) baselineY=\(debugNumber(containerRefreshHostScrollViewStorage.neutralBaselineContentOffsetY)) proxyY=\(debugNumber(containerRefreshProxyOverscrollOffsetY)) insetTop=\(debugNumber(containerRefreshHostScrollViewStorage.contentInset.top)) activeHandoff=\(String(describing: refreshHandoffCoordinator.activeHandoff))"
         )
         containerRefreshProxyOverscrollOffsetY = 0
+        containerRefreshHostRejectedChildGestureIndex = nil
         updateHeaderHostPlacement(reason: refreshHandoffCoordinator.activeHandoff == nil ? .currentChild : .refresh)
         return true
     }
@@ -1686,7 +1773,7 @@ open class CollapsiblePagerViewController: UIViewController {
             "gestureRequest accepted from=\(fromIndex) target=\(targetIndex) position={\(debugPagePosition(position))} \(debugPagingState())"
         )
         _ = loadChildIfNeeded(at: targetIndex)
-        beginPageAppearanceTransition(to: targetIndex, animated: true)
+        beginPageAppearanceTransitionForNewRequest(to: targetIndex, animated: true)
     }
 
     private func interactiveTargetIndex(for position: PagePosition, currentIndex: Int) -> Int? {
@@ -1744,6 +1831,13 @@ open class CollapsiblePagerViewController: UIViewController {
         )
         fromRecord.viewController.beginAppearanceTransition(false, animated: animated)
         targetRecord.viewController.beginAppearanceTransition(true, animated: animated)
+    }
+
+    private func beginPageAppearanceTransitionForNewRequest(to targetIndex: Int, animated: Bool) {
+        if let transition = activePageAppearanceTransition, transition.toIndex != targetIndex {
+            finishPageAppearanceTransition(completedIndex: transition.fromIndex)
+        }
+        beginPageAppearanceTransition(to: targetIndex, animated: animated)
     }
 
     private func finishPageAppearanceTransition(completedIndex: Int) {

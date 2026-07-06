@@ -122,16 +122,24 @@ final class CollapsiblePagerChildStore {
             managedTopInset: topInset,
             pinThreshold: pinThreshold
         )
-        scrollView.contentInset = contentInset
+        if scrollView.contentInset != contentInset {
+            scrollView.contentInset = contentInset
+        }
 
         var indicatorInsets = baseScrollIndicatorInsets
         indicatorInsets.top = max(0, topInset)
         indicatorInsets.bottom = max(0, bottomInset)
         // Pager 已手动管理 indicator inset，避免 UIKit 再追加 safe area 或 bar 避让。
-        scrollView.automaticallyAdjustsScrollIndicatorInsets = false
-        scrollView.verticalScrollIndicatorInsets = indicatorInsets
+        if scrollView.automaticallyAdjustsScrollIndicatorInsets {
+            scrollView.automaticallyAdjustsScrollIndicatorInsets = false
+        }
+        if scrollView.verticalScrollIndicatorInsets != indicatorInsets {
+            scrollView.verticalScrollIndicatorInsets = indicatorInsets
+        }
 
-        scrollView.contentInsetAdjustmentBehavior = .never
+        if scrollView.contentInsetAdjustmentBehavior != .never {
+            scrollView.contentInsetAdjustmentBehavior = .never
+        }
     }
 
     private func managedBottomInset(

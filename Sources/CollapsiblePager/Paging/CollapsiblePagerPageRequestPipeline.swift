@@ -20,6 +20,12 @@ struct PageRequest: Sendable, Equatable {
     }
 }
 
+enum PageTransitionCompletionResult: Sendable, Equatable {
+    case committed
+    case cancelled
+    case ignored
+}
+
 struct PageRequestPipeline: Sendable {
     func request(_ request: PageRequest, state: inout CollapsiblePagerState) -> Bool {
         guard state.pageCount > 0,
@@ -41,18 +47,32 @@ struct PageRequestPipeline: Sendable {
         return true
     }
 
-    func complete(targetIndex: Int, state: inout CollapsiblePagerState) {
-        guard state.pageCount > 0, isValid(targetIndex, in: state) else {
+    @discardableResult
+    func complete(targetIndex: Int, state: inout CollapsiblePagerState) -> PageTransitionCompletionResult {
+        guard state.pageCount > 0 else {
             state.pendingSelectedIndex = nil
             state.effectiveSelectedIndex = nil
             state.pagePosition = nil
-            return
+            return .ignored
+        }
+
+        guard isValid(targetIndex, in: state) else {
+            return .ignored
+        }
+
+        guard state.pendingSelectedIndex == targetIndex else {
+            if state.pendingSelectedIndex != nil, state.effectiveSelectedIndex == targetIndex {
+                cancel(sourceIndex: targetIndex, state: &state)
+                return .cancelled
+            }
+            return .ignored
         }
 
         state.selectedIndex = targetIndex
         state.effectiveSelectedIndex = targetIndex
         state.pendingSelectedIndex = nil
         state.pagePosition = PagePosition.make(rawPosition: CGFloat(targetIndex), pageCount: state.pageCount, isInteractive: false)
+        return .committed
     }
 
     func cancel(sourceIndex: Int, state: inout CollapsiblePagerState) {

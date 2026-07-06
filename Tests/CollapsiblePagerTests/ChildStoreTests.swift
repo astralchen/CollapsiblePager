@@ -51,6 +51,36 @@ import UIKit
 }
 
 @MainActor
+@Test func childStoreDoesNotRewriteUnchangedContentInsetAfterContentSizeChanges() throws {
+    let pager = CollapsiblePagerViewController()
+    let store = CollapsiblePagerChildStore(owner: pager)
+    let child = InsetTrackingScrollChild()
+    child.scrollView.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+    child.scrollView.contentSize = CGSize(width: 390, height: 2_000)
+
+    let record = try #require(
+        store.makeRecord(
+            for: child,
+            index: 0,
+            managedTopInset: 308,
+            managedBottomInset: 34,
+            pinThreshold: 260
+        )
+    )
+    let contentInsetWriteCount = child.scrollView.contentInsetWriteCount
+
+    child.scrollView.contentSize = CGSize(width: 390, height: 2_200)
+    store.updateManagedInset(
+        for: record,
+        managedTopInset: 308,
+        managedBottomInset: 34,
+        pinThreshold: 260
+    )
+
+    #expect(child.scrollView.contentInsetWriteCount == contentInsetWriteCount)
+}
+
+@MainActor
 @Test func childStoreUsesStandardContainmentWhenAttachingAndDetaching() throws {
     let pager = CollapsiblePagerViewController()
     pager.loadViewIfNeeded()
@@ -71,4 +101,24 @@ import UIKit
 private final class ScrollChild: UIViewController, CollapsiblePagerScrollProviding {
     let scrollView = UIScrollView()
     var pagerScrollView: UIScrollView { scrollView }
+}
+
+@MainActor
+private final class InsetTrackingScrollChild: UIViewController, CollapsiblePagerScrollProviding {
+    let scrollView = InsetTrackingScrollView()
+    var pagerScrollView: UIScrollView { scrollView }
+}
+
+private final class InsetTrackingScrollView: UIScrollView {
+    private(set) var contentInsetWriteCount = 0
+
+    override var contentInset: UIEdgeInsets {
+        get {
+            super.contentInset
+        }
+        set {
+            contentInsetWriteCount += 1
+            super.contentInset = newValue
+        }
+    }
 }
