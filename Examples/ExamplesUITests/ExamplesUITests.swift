@@ -43,6 +43,11 @@ final class ExamplesUITests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
+        let pagerTab = app.tabBars.buttons["Pager"]
+        if pagerTab.waitForExistence(timeout: 5) {
+            pagerTab.tap()
+        }
+
         let table = app.tables["demo-list-long"]
         XCTAssertTrue(table.waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["demo-header-progress"].waitForExistence(timeout: 8))
@@ -58,6 +63,51 @@ final class ExamplesUITests: XCTestCase {
         XCTAssertTrue(title.isHittable)
         XCTAssertTrue(app.staticTexts["demo-header-selection"].isHittable)
         XCTAssertTrue(app.staticTexts["demo-header-progress"].isHittable)
+    }
+
+    @MainActor
+    func testLongListBottomPullLoadsMoreRowsAndShowsNoMoreDataAboveTabBar() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let pagerTab = app.tabBars.buttons["Pager"]
+        if pagerTab.waitForExistence(timeout: 5) {
+            pagerTab.tap()
+        }
+
+        let table = app.tables["demo-list-long"]
+        XCTAssertTrue(table.waitForExistence(timeout: 8))
+
+        let lastOriginalCell = scrollToCell("demo-list-long-row-59", in: table)
+        XCTAssertTrue(lastOriginalCell.waitForExistence(timeout: 8))
+
+        performBottomPull(in: table)
+
+        let appendedCell = table.cells["demo-list-long-row-63"]
+        for _ in 0..<5 where !appendedCell.waitForExistence(timeout: 1) {
+            table.swipeUp()
+        }
+
+        XCTAssertTrue(appendedCell.waitForExistence(timeout: 5))
+        XCTAssertEqual(appendedCell.staticTexts["Long row 64"].label, "Long row 64")
+
+        _ = scrollToCell("demo-list-long-row-63", in: table)
+        performBottomPull(in: table)
+        XCTAssertTrue(scrollToCell("demo-list-long-row-67", in: table).waitForExistence(timeout: 5))
+
+        performBottomPull(in: table)
+        let finalCell = scrollToCell("demo-list-long-row-71", in: table)
+        XCTAssertTrue(finalCell.waitForExistence(timeout: 5))
+
+        let noMoreDataLabel = app.staticTexts["没有更多数据"]
+        for _ in 0..<5 where !noMoreDataLabel.waitForExistence(timeout: 1) {
+            table.swipeUp()
+        }
+        XCTAssertTrue(noMoreDataLabel.isHittable)
+
+        let tabBar = app.tabBars.firstMatch
+        XCTAssertTrue(tabBar.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(noMoreDataLabel.frame.maxY, tabBar.frame.minY - 1)
     }
 
     @MainActor
@@ -97,6 +147,25 @@ final class ExamplesUITests: XCTestCase {
         } else {
             app.buttons[title].tap()
         }
+    }
+
+    @MainActor
+    private func scrollToCell(_ identifier: String, in table: XCUIElement, attempts: Int = 10) -> XCUIElement {
+        let cell = table.cells[identifier]
+        for _ in 0..<attempts {
+            if cell.waitForExistence(timeout: 1) {
+                break
+            }
+            table.swipeUp()
+        }
+        return cell
+    }
+
+    @MainActor
+    private func performBottomPull(in table: XCUIElement) {
+        let start = table.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.82))
+        let end = table.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.16))
+        start.press(forDuration: 0.05, thenDragTo: end)
     }
 
     @MainActor

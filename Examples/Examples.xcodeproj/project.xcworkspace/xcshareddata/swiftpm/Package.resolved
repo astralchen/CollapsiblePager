@@ -1,0 +1,15 @@
+{
+  "originHash" : "245af33744cf2e0228944c853a25b0e5ad1872c71f9f1d33f786d9211c5714a2",
+  "pins" : [
+    {
+      "identity" : "refreshable",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/astralchen/Refreshable.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "d445cf96c23665433ba35246aebabd7985f0db14"
+      }
+    }
+  ],
+  "version" : 3
+}

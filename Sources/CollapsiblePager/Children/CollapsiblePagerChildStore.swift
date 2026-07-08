@@ -26,13 +26,19 @@ final class CollapsiblePagerChildStore {
         let baseShowsVerticalScrollIndicator = scrollView.showsVerticalScrollIndicator
         let baseShowsHorizontalScrollIndicator = scrollView.showsHorizontalScrollIndicator
         let clampedTopInset = max(0, managedTopInset)
-        applyManagedInsets(
-            to: scrollView,
+        let lastManagedContentInset = managedContentInset(
+            for: scrollView,
             baseContentInset: baseContentInset,
-            baseScrollIndicatorInsets: baseScrollIndicatorInsets,
             topInset: clampedTopInset,
             bottomInset: managedBottomInset,
             pinThreshold: pinThreshold
+        )
+        applyManagedInsets(
+            to: scrollView,
+            managedContentInset: lastManagedContentInset,
+            baseScrollIndicatorInsets: baseScrollIndicatorInsets,
+            topInset: clampedTopInset,
+            bottomInset: managedBottomInset
         )
         resetInitialOffset(for: scrollView, managedTopInset: clampedTopInset, pinAnchorY: initialPinAnchorY)
 
@@ -56,6 +62,7 @@ final class CollapsiblePagerChildStore {
             baseScrollIndicatorInsets: baseScrollIndicatorInsets,
             baseShowsVerticalScrollIndicator: baseShowsVerticalScrollIndicator,
             baseShowsHorizontalScrollIndicator: baseShowsHorizontalScrollIndicator,
+            lastManagedContentInset: lastManagedContentInset,
             lastKnownContentOffsetY: scrollView.contentOffset.y
         )
     }
@@ -89,13 +96,23 @@ final class CollapsiblePagerChildStore {
         pinThreshold: CGFloat = 0
     ) {
         let clampedTopInset = max(0, managedTopInset)
-        applyManagedInsets(
-            to: record.scrollView,
+        let externalBottomInset = max(0, record.scrollView.contentInset.bottom - record.lastManagedContentInset.bottom)
+        let nextManagedContentInset = managedContentInset(
+            for: record.scrollView,
             baseContentInset: record.baseContentInset,
-            baseScrollIndicatorInsets: record.baseScrollIndicatorInsets,
             topInset: clampedTopInset,
             bottomInset: managedBottomInset,
             pinThreshold: pinThreshold
+        )
+        // contentInset 写入会同步触发 UITableView contentSize KVO；先提交基线，重入时才能正确识别外部 footer inset。
+        record.lastManagedContentInset = nextManagedContentInset
+        applyManagedInsets(
+            to: record.scrollView,
+            managedContentInset: nextManagedContentInset,
+            baseScrollIndicatorInsets: record.baseScrollIndicatorInsets,
+            topInset: clampedTopInset,
+            bottomInset: managedBottomInset,
+            preservedExternalBottomInset: externalBottomInset
         )
         record.mountView.frame = CGRect(
             x: 0,
@@ -107,21 +124,15 @@ final class CollapsiblePagerChildStore {
 
     private func applyManagedInsets(
         to scrollView: UIScrollView,
-        baseContentInset: UIEdgeInsets,
+        managedContentInset: UIEdgeInsets,
         baseScrollIndicatorInsets: UIEdgeInsets,
         topInset: CGFloat,
         bottomInset: CGFloat,
-        pinThreshold: CGFloat
+        preservedExternalBottomInset: CGFloat = 0
     ) {
-        var contentInset = baseContentInset
-        contentInset.top = max(0, topInset)
-        contentInset.bottom = managedBottomInset(
-            for: scrollView,
-            baseBottomInset: baseContentInset.bottom,
-            layoutBottomInset: bottomInset,
-            managedTopInset: topInset,
-            pinThreshold: pinThreshold
-        )
+        var contentInset = managedContentInset
+        // 上拉加载 footer 等外部机制可能会在 Pager 基线之上追加 bottom inset。
+        contentInset.bottom += max(0, preservedExternalBottomInset)
         if scrollView.contentInset != contentInset {
             scrollView.contentInset = contentInset
         }
@@ -140,6 +151,25 @@ final class CollapsiblePagerChildStore {
         if scrollView.contentInsetAdjustmentBehavior != .never {
             scrollView.contentInsetAdjustmentBehavior = .never
         }
+    }
+
+    private func managedContentInset(
+        for scrollView: UIScrollView,
+        baseContentInset: UIEdgeInsets,
+        topInset: CGFloat,
+        bottomInset: CGFloat,
+        pinThreshold: CGFloat
+    ) -> UIEdgeInsets {
+        var contentInset = baseContentInset
+        contentInset.top = max(0, topInset)
+        contentInset.bottom = managedBottomInset(
+            for: scrollView,
+            baseBottomInset: baseContentInset.bottom,
+            layoutBottomInset: bottomInset,
+            managedTopInset: topInset,
+            pinThreshold: pinThreshold
+        )
+        return contentInset
     }
 
     private func managedBottomInset(

@@ -129,6 +129,7 @@ final class CollapsiblePagerPageContainer: UIView, UIScrollViewDelegate {
         scrollView.showsVerticalScrollIndicator = false
         scrollView.alwaysBounceHorizontal = false
         scrollView.alwaysBounceVertical = false
+        scrollView.scrollsToTop = false
         scrollView.delegate = self
         addSubview(scrollView)
     }

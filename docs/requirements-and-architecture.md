@@ -20,9 +20,9 @@
 NestedPageViewController 的优势是纵向嵌套滚动与 Header 宿主迁移。
 
 - Child 必须显式提供主滚动视图。核心不猜测第一个 scroll view。
-- 内部使用不可见 `pin` 作为纵向状态锚点。Header 可见高度、吸顶状态和非当前 child offset 同步不只依赖当前 child 的 `contentOffset.y`。
+- 内部使用不可见 `pin` 作为当前页纵向状态锚点。Header 可见高度和吸顶状态由当前 child 的 `contentOffset.y` 与 `pin` 共同决定；非当前 child 不持续跟随当前页滚动，但在被选为当前页时必须按共享 `pin` 做一次可见位置归一化，避免 Header/TabBar 在切页提交时跳动。
 - 每个 child scroll view 有自己的 Header mount。真实 Header 视觉内容只有一份，在 child mount 和 fixed overlay 之间迁移。
-- 横向切页期间冻结纵向 KVO/observer 回调，Header 迁移到 fixed overlay，切页结束后按目标 child 和 pin 状态恢复。
+- 横向切页期间冻结纵向 KVO/observer 回调，Header 迁移到 fixed overlay。Tab 点击提交时以当前共享 `pin` 为准归一化目标 child；只有当前已经完全吸顶且目标 child 也滚过吸顶阈值时，才保留目标 child 更深的列表 offset。公开 API 仍按当前 `pin` 对齐目标 child；正常横向手势提交时，若完成页就是 pending target，则以目标 child 当前 offset 采纳新的 `pin`，避免目标页内容与 Header/TabBar 使用两套纵向状态。手势过冲后稳定到中间页时仍保持当前 `pin` 并对齐目标 child。
 - 顶部回弹、完全吸顶、刷新 reveal/end 动画是 pin anchor 最有价值的场景。pin 不动时，非当前 child 不应收到错误 offset delta。
 - 刷新不是核心拥有的业务事件。示例中的整体刷新和局部刷新都由外部 child scroll view 安装刷新控件，核心只保证 Header 展开优先、刷新手势不与 Header/切页冲突。
 
@@ -65,6 +65,7 @@ Tabman 的优势是横向分页状态链路和 TabBar 渲染分层。
 - 支持点击 Tab、API 选择和横向滑动切页。
 - 支持连续 `PagePosition` 驱动 Tab selected progress 和 indicator focus rect。
 - 支持 `.none`、`.container`、`.child` 三种刷新 handoff 能力路由。
+- 支持状态栏点击顶滚，并按 Header 是否吸顶在容器 host 与当前 child scroll view 之间切换唯一响应者。
 - 支持没有 child 的空态兜底。
 - 支持作为业务 `UITabBarController -> UINavigationController -> UIViewController` 层级中的内容页，不假设自己是 window root。
 - 符合 Swift 6 strict concurrency 和 iOS 13 要求。
@@ -226,15 +227,19 @@ public enum CollapsiblePagerHeaderPullDownRefreshBehavior: Sendable {
 
 `containerRefreshHostScrollView` 是框架拥有的外层纵向 host，包住 `PageContainerView` 与 `PinnedSurfaceView`。它的刷新 reveal 基线对齐 content viewport 顶部，也就是 `pinY = max(navigationBar.maxY, safeArea.top) + offset`；静止时 `contentInset.top == pinY` 且 `contentOffset.y == -pinY`。host 内部内容层会反向平移 `-pinY`，因此 Header、TabBar 和 PageContainer 的屏幕位置仍严格服从 layout engine 输出。child 自己的 managed top inset 仍只属于 child scroll view，用来表达 Header/TabBar 占位。这个 host 只提供外层纵向刷新坐标系和手势入口，不提供从 `-pinY` 到 `0` 的普通内容滚动区间；它的 content size 必须让 neutral baseline 成为正常滚动上界。业务可以在上面安装自己的刷新机制，也可以不安装。业务仍只负责是否安装刷新机制、刷新任务和结束时机。
 
-在 `.container` 模式的顶部下拉路径中，容器会让 current child 的 pan gesture 等待 `containerRefreshHostScrollView.panGestureRecognizer` 失败。host 只有在 Header 完全展开、current child 位于 managed top boundary 且手势为下拉时才会 begin；其他方向和其他模式会快速失败并交还给 child。host 的下拉意图判断同时参考 translation 和 velocity；当 `gestureRecognizerShouldBegin(_:)` 发生在 translation 仍为零但 velocity 已明确向下的早期阶段时，host 仍应 begin，避免错误失败后让 child pan 接管并进入 proxy bounce。这样从 child 内容顶部起始的下拉不会先触发 child 自身 top bounce，再被容器拉回边界，从源头避免内容下移抖动。
+在 `.container` 模式的顶部下拉路径中，容器会让 current child 的 pan gesture 等待 `containerRefreshHostScrollView.panGestureRecognizer` 失败。host 只有在 Header 完全展开、current child 位于 managed top boundary 且手势为下拉时才会作为刷新 reveal owner begin；其他方向和其他模式会快速失败并交还给 child。host 的下拉意图判断同时参考 translation 和 velocity；当 `gestureRecognizerShouldBegin(_:)` 发生在 translation 仍为零但 velocity 已明确向下的早期阶段时，host 仍应 begin，避免错误失败后让 child pan 接管并进入 proxy bounce。这样从 child 内容顶部起始的下拉不会先触发 child 自身 top bounce，再被容器拉回边界，从源头避免内容下移抖动。
 
-参考 NestedPageViewController 的顶部 bounce 与 Header fixed container 处理，`.container` handoff 期间外层 host 的 overscroll 是唯一纵向 reveal 来源。由于 `PinnedSurfaceView` 与 `PageContainerView` 同属 host 内容层，host overscroll 会让 Header、TabBar 和 page content 作为一个整体下移；child 直接进入 top bounce 的兜底路径只记录代理 overscroll，并立即把 child 拉回 managed top boundary。代理 overscroll 一旦为负，就已经进入 container reveal 生命周期；即使 active handoff 尚未提交，Header host 也必须保持在 fixed overlay，不能短暂回迁到 child mount。同一手势中，如果外层 host 作为非 tracking scroll view 被 UIKit 临时校正回 neutral baseline，保存的代理 overscroll 仍是 reveal 源值，容器必须恢复该 offset，直到 handoff 结束或业务刷新机制接管 content inset。业务刷新机制接管 content inset 后，容器只释放内部 proxy overscroll，不把 host offset 抢回 neutral baseline。host 自己接管的下拉也不能仅因为 `scrollViewDidScroll` 中 offset 短暂碰到 neutral baseline 就结束 handoff；结束应发生在拖拽、减速或滚动动画结束后的 idle finish 阶段。child 代理路径也必须监听 child pan 的 ended/cancelled/failed，在没有业务刷新 inset 接管且 child、host 都 idle 时执行同一套 finish reset，避免没有后续 `contentOffset` 回调时旧 proxy 停留。如果 UIKit 在 active `.containerHost` 期间把 host offset 推到 neutral baseline 以上，容器必须立即夹回 baseline，不能让内容层向上滚动。这样不会在 TabBar 与 page content 之间产生空洞，也不会让 Header、TabBar 和 child frame 被 host 的普通滚动区间整体顶到导航栏下方或状态栏区域。
+Header/TabBar 区域本身不一定命中 current child scroll view。Header 完全展开且 current child 位于 managed top boundary 时，如果手势从 Header 或 TabBar 区域明确向上开始，`containerRefreshHostScrollView` 可以 begin 一个 upward proxy 会话；该会话不表示刷新 handoff，也不创建 `.containerHost` active handoff。upward proxy 生命周期内，host 每次被拖到 neutral baseline 以上，都把这段向上 delta 转交给 current child 的 `contentOffset`，再把 host 夹回 neutral baseline；如果同一 host pan 抖动到 baseline 以下，也只夹回 baseline，不进入刷新 reveal。这样从 Header/TabBar 开始向上拖也能连续折叠 Header 或推动列表，而不会被外层刷新 host 吞掉或产生上移后的回弹。
+
+状态栏点击顶滚必须保证 window 内只有一个框架管理的响应者。PageContainer 的横向 paging scroll view 永远 `scrollsToTop = false`。当 `collapseProgress < 1` 时，响应者是 `containerRefreshHostScrollView`，所有 loaded child scroll view 都关闭 `scrollsToTop`；host 收到 `scrollViewShouldScrollToTop` 后，如果 Header 仍处于半折叠状态，会把 current child 动画滚回 expanded managed top boundary，因为 V1 的 `PinAnchor` 仍由 current child 的 `contentOffset` 表达。当 `0 < collapseProgress < 1` 时，host 仍保持视觉上的 neutral baseline，但会打开最小的状态栏顶滚激活 inset，让 UIKit 不把 host 判定为已经在顶部而跳过 `scrollViewShouldScrollToTop`；该 inset 属于 neutral refresh inset 的一部分，只服务系统顶滚触发条件，不创建从 `-pinY` 到 `0` 的普通内容滚动区间，并在完全展开、吸顶或没有有效页面时关闭。当 `collapseProgress == 1` 时，host 和非当前 child 都关闭 `scrollsToTop`，只有当前可见 child 的 `pagerScrollView` 响应状态栏点击。没有有效页面选择时，host、PageContainer 和所有 child 都不参与状态栏顶滚。
+
+参考 NestedPageViewController 的顶部 bounce 与 Header fixed container 处理，`.container` handoff 期间外层 host 的 overscroll 是唯一纵向 reveal 来源。由于 `PinnedSurfaceView` 与 `PageContainerView` 同属 host 内容层，host overscroll 会让 Header、TabBar 和 page content 作为一个整体下移；child 直接进入 top bounce 的兜底路径只记录代理 overscroll，并立即把 child 拉回 managed top boundary。代理 overscroll 一旦为负，就已经进入 container reveal 生命周期；即使 active handoff 尚未提交，Header host 也必须保持在 fixed overlay，不能短暂回迁到 child mount。同一手势中，如果外层 host 作为非 tracking scroll view 被 UIKit 临时校正回 neutral baseline，保存的代理 overscroll 仍是 reveal 源值，容器必须恢复该 offset，直到 handoff 结束或业务刷新机制接管 content inset。业务刷新机制接管 content inset 后，容器只释放内部 proxy overscroll，不把 host offset 抢回 neutral baseline。host 自己接管的下拉也不能仅因为 `scrollViewDidScroll` 中 offset 短暂碰到 neutral baseline 就结束 handoff；结束应发生在拖拽、减速或滚动动画结束后的 idle finish 阶段。child 代理路径也必须监听 child pan 的 ended/cancelled/failed，在没有业务刷新 inset 接管且 child、host 都 idle 时执行同一套 finish reset，避免没有后续 `contentOffset` 回调时旧 proxy 停留。除 Header/TabBar upward proxy 会话外，如果 UIKit 在 active `.containerHost` 期间把 host offset 推到 neutral baseline 以上，容器必须立即夹回 baseline，不能让内容层向上滚动。这样不会在 TabBar 与 page content 之间产生空洞，也不会让 Header、TabBar 和 child frame 被 host 的普通滚动区间整体顶到导航栏下方或状态栏区域。
 
 当 `.containerHost(index:)` 已经是当前 page 的 active handoff，且 host 或代理 overscroll 仍未回到 neutral baseline 时，后续 container host pan 的 `shouldBegin` 必须保持 owner 连续性。UIKit 在新一轮 pan 进入 `gestureRecognizerShouldBegin(_:)` 的早期可能同时给出 `translation == .zero` 和 `velocity == .zero`；这只是初始采样不足，不应让 host pan fail 并把手势重新交给 child。代理 overscroll 只在 child 仍持有触摸、或 host 作为 idle/recovery scroll view 被 UIKit 临时校正时作为 reveal 源值；一旦 `containerRefreshHostScrollView.panGestureRecognizer` 真正 begin，owner 必须移交给 host 并清空代理值，后续 offset 由 host pan 自己驱动。否则 restore 分支会持续把 host 拉回旧 proxy 位置，表现为吸顶后再下滑无法继续整体移动。只有 idle finish 清空 active handoff 和 overscroll 后，下一次下拉才重新按方向、Header 展开和 child top 边界判断 owner。
 
 Header 展开优先级高于 `.container` 刷新 handoff。已经代理到 container host 的下拉，如果 Header 重新进入未完全展开状态，且 container host 仍处于业务刷新机制未接管的 neutral inset 状态，容器必须取消当前 container handoff、清空代理 overscroll，并把 host offset 还原到 neutral baseline。child 在 Header 完全展开时被框架拉回 managed top boundary 是正常代理路径，不作为取消条件；该路径继续以 container host / proxy overscroll 作为唯一 reveal 源值，直到手势结束后的 idle finish 或业务刷新机制接管 content inset。业务刷新机制接管后，proxy 必须清空，后续停留位置由业务刷新机制自己的 inset/offset 动画表达。这样旧 handoff 不会继续把 Header 固定在 overlay，也不会影响下一次从 Header 或内容区开始的下拉判定。
 
-示例 App 当前使用系统 `UIRefreshControl` 演示业务侧如何在 container host 或 child scroll view 上挂载刷新机制。核心包不创建、不包装、不替换该控件，也不介入具体刷新实现。示例 App 的 `Refresh` 根 Tab 提供 `.none`、`.container`、`.child` 三种独立 pager，用于验证刷新 handoff 配置差异。
+示例 App 当前使用系统 `UIRefreshControl` 演示业务侧如何在 container host 或 child scroll view 上挂载顶部刷新机制，并在根 Pager 的 `Long` child 上使用 `Refreshable.loadMoreable` 演示底部加载更多。核心包不创建、不包装、不替换这些控件，也不介入具体刷新实现。业务侧异步刷新或加载更多任务如果跨 page 切换完成，应自行取消或忽略离屏 child 的完成回调，避免在离屏 scroll view 上追加数据、重载列表并触发 `contentSize` / `contentOffset` 竞争。第三方底部加载组件如果支持“滚动接近底部自动触发”，业务侧应按场景关闭或加门禁；Pager 在切页和 layout 恢复时会程序化校准 child `contentOffset`，该 offset 校准不能被误认为用户上拉加载。Tab 点击完成后，如果容器为了保持当前 Header 位置而校准了目标 child offset，后续非用户触发的更深 `contentOffset` 回弹不能立即改写共享 `PinAnchor`；容器会短期锁定本次 Tab 选择建立的 offset，直到用户真实拖动、切到其他 page 或向更展开方向移动。示例 App 因此把 Refreshable 的 `automaticTriggerOffset` 设为 `nil`，保留用户拖拽上拉触发。Refreshable bottom footer 与 Pager 管理的底部遮挡共同作用在 `contentInset.bottom` 上；示例 App 在进入 no-more 状态后会确保 bottom inset 至少包含 Pager 暴露给 scroll indicator 的底部遮挡和 Refreshable footer 保留高度，避免“没有更多数据”落入底部 TabBar 视觉区域。因为 Pager 可以按 child window 卸载并重新请求远端 child，示例 App 的 Long 列表行数、已加载数量、no-more 状态和 no-more footer 是否应保持可见都由 data source 持有的 page state 保存，child controller 只负责渲染该状态；业务方不应把必须跨切页保留的数据或 footer 可见语义只存在可被重建的 child controller 实例中。示例 App 的 `Refresh` 根 Tab 提供 `.none`、`.container`、`.child` 三种独立 pager，用于验证刷新 handoff 配置差异。
 
 ## 8. 内部模块
 
@@ -302,11 +307,13 @@ Header frame 的顶部由 `CollapsiblePagerHeaderTopBehavior` 决定。默认 `.
 - 使用标准 containment。
 - 校验 child 是否遵守 `CollapsiblePagerScrollProviding`。
 - 设置 content inset、scroll indicator inset、contentInsetAdjustmentBehavior。
-- Pager 接管 child scroll view 后，vertical scroll indicator 的 top/bottom inset 由当前 layout 输出管理；bottom 使用安全区/布局 bottom inset，不保留接管前可能由 UIKit 自动调整产生的旧值，并关闭 `automaticallyAdjustsScrollIndicatorInsets` 避免 UIKit 再追加 safe area 或 bar 避让。
+- Pager 接管 child scroll view 后，vertical scroll indicator 的 top/bottom inset 由当前 layout 输出管理；bottom 使用安全区与可见底部遮挡的最大值，不保留接管前可能由 UIKit 自动调整产生的旧值，并关闭 `automaticallyAdjustsScrollIndicatorInsets` 避免 UIKit 再追加 safe area 或 bar 避让。
+- Child content bottom inset 的 Pager 管理基线使用安全区、可见底部遮挡和短内容补偿。外部刷新/加载更多组件在该基线之上追加的正向 bottom inset 需要在 `contentSize` 触发重算时保留，避免 footer / no-more 提示被后续 managed inset 写回抹掉。
 - 短内容或空内容 child 按当前 viewport、contentSize、managed top inset 和 pin threshold 计算 bottom inset 补偿，确保真实内容不足一屏时仍可滚到吸顶阈值。
+- Child root view 和 page view 继续铺满 PageContainer viewport，不通过把 child frame 下移来避让 Header/TabBar；Header/TabBar 占位由 child scroll view 的 managed inset 与 guarded contentOffset 表达。业务侧空态、overlay 或 background view 若需要视觉居中，应按 scroll view 当前可见区域、managed top boundary 和底部遮挡计算，而不能直接以 child root view frame 作为内容可见区域。
 - `contentSize` 变化触发 managed inset 重算时，只在目标 `contentInset`、scroll indicator inset 或 adjustment 行为实际变化时写回 `UIScrollView`；长列表滚动中由 UITableView 估算高度产生的 contentSize 微调不能反复重写相同 inset，避免底部滚动被 UIKit 夹回旧边界。
-- 创建时按当前 pin anchor 校准初始 contentOffset。
-- 切页提交后，新的 current child 如果低于当前 pin anchor 所需 offset，必须通过 guarded update 补齐；如果已经滚得更深，保留该 child 自己的列表位置。
+- 未访问 child 默认从展开态 top boundary 初始化；如果该 child 是 Tab 点击的目标页，则在请求发起时先继承当前 `pinAnchor` 对应的 offset，避免点击提交后 Header 从半折叠或吸顶状态跳回展开态。
+- Tab 点击提交后，新的 current child 不使用自己的旧 offset 反推 pin anchor，而是保持当前共享 `pinAnchor` 并按需校准目标 offset；只有当前已经完全吸顶且目标 child 也超过吸顶阈值时，才保留目标 child 更深的列表位置。公开 API 与横向手势提交后，新的 current child 如果低于当前 pin anchor 所需 offset，仍通过 guarded update 补齐；如果已经滚得更深，保留该 child 自己的列表位置。
 - child window 裁剪卸载 controller 前必须保存该 index 的 contentOffset snapshot。重新加载时如果内容尺寸暂时不足以恢复，offset 恢复保持 pending，并在后续 `contentSize` 变化、managed inset 重算后继续尝试。
 - 为每个 loaded child 创建 HeaderMountView。
 
@@ -318,7 +325,7 @@ Header frame 的顶部由 `CollapsiblePagerHeaderTopBehavior` 决定。默认 `.
 - 横向切页期间忽略纵向回调。
 - 使用 guarded update 主动修正 offset，避免递归。
 - 通过 pin anchor 计算 Header visible height 和 collapse progress。
-- 非当前 child 的 offset 同步只使用 pin anchor delta。
+- 非当前 child 默认不跟随当前页 pin anchor delta；它们保留自己的纵向位置。`VerticalScrollCoordinator` 仍支持受控的 sync eligible 集合，用于需要显式同步的内部场景。
 - 顶部回弹、完全吸顶和刷新 reveal 阶段，pin 不动则不传播 offset。
 - Header 展开优先于刷新。
 
@@ -355,13 +362,14 @@ struct PageRequest: Sendable {
 
 1. 校验 page count 和 index。
 2. 空页或越界 no-op。
-3. 建立 pending selection。
+3. 建立 pending selection，并记录 pending 请求来源；如果目标等于当前 `effectiveSelectedIndex` 且已有 pending target，视为用户点回当前页，取消 pending selection 并回滚 indicator。
 4. 驱动 PageContainer；相邻动画切换使用 paging scroll 动画，非相邻 programmatic 跳转直接设置目标页并完成。
 5. 输出 PagePosition 给 TabBar/indicator。
-6. 完成事件必须匹配当前 `pendingSelectedIndex` 才提交 `selectedIndex`。
-7. 完成后按当前页裁剪 child window，只保留当前页和相邻页。
-8. 横向手势回到来源页时取消并回滚 pending selection 和 indicator。
-9. 被后续请求取代的旧动画完成回调是 no-op，不得提交中间页、裁剪 child window、重放旧 offset 或结束到旧目标的 child appearance transition。
+6. 完成事件默认必须匹配当前 `pendingSelectedIndex` 才提交 `selectedIndex`。横向手势可能在同一次拖拽中过冲到更远页后又停在中间页；当 pending 来源是 `.gesture`，且 PageContainer 的稳定 `PagePosition` 已停在 completion target 时，提交实际停靠页。
+7. `UIScrollView` 可能在 `scrollToPage(animated:)` 启动期间同步发出 completion；容器必须先暂存该 completion，等 `PagePosition` 稳定到 completion target 后再消费。若 pending target 已经稳定可见但 completion 已被启动期保护延后，用户再次点击同一 Tab 时直接提交该 pending selection，不能重新发起一笔等不到完成回调的动画。
+8. 完成后按当前页裁剪 child window，只保留当前页和相邻页。
+9. 横向手势回到来源页时取消并回滚 pending selection 和 indicator。
+10. 被后续 Tab/API 请求取代的旧动画完成回调是 no-op，不得提交中间页、裁剪 child window、重放旧 offset 或结束到旧目标的 child appearance transition。
 
 ### 8.9 TabBarController
 
@@ -422,6 +430,7 @@ struct CollapsiblePagerState: Sendable {
     var selectedIndex: Int
     var effectiveSelectedIndex: Int?
     var pendingSelectedIndex: Int?
+    var pendingPageRequestSource: PageRequestSource?
     var pageCount: Int
     var pagePosition: PagePosition?
     var pinAnchorY: CGFloat
@@ -477,12 +486,13 @@ struct PagePosition: Sendable, Equatable {
 
 - 空页 no-op。
 - 负数或越界 no-op。
-- 目标等于当前 effective selection 时，只校准 Tab/indicator，不重复 delegate。
+- 目标等于当前 effective selection 且没有 pending target 时，只校准 Tab/indicator，不重复 delegate；如果已有 pending target，则取消 pending 切换并回到当前页。
 - 有效请求进入 PageRequestPipeline。
 - animated 为 false 时也经过同一提交路径，只是 PageContainer 立即定位。
 - 横向 scroll 动画只用于相邻页面切换；非相邻切换采用 direct source/target 立即定位，不滚过中间页。
 - TabBar item 点击内部使用 `.tabTap` 请求；相邻页允许横向 scroll 动画且 child controller appearance transition 使用 `animated = true`，非相邻页直接定位且 child controller appearance transition 使用 `animated = false`。
 - 快速连续 Tab/API 请求以最后一个 pending target 为准；旧请求的完成回调如果不再匹配 pending target，容器必须忽略该回调，不能把 `selectedIndex` 临时切到中间页。
+- 如果相邻 Tab 动画的 completion 在启动期被暂存，且后续 `PagePosition` 已稳定到 pending target，再次点击同一目标 Tab 应提交该 pending selection，并清空 pending source，而不是重启动画。
 
 ### 10.3 Header 布局刷新
 

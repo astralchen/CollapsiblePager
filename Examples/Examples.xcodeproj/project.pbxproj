@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		C0DEC0DE0000000000000001 /* CollapsiblePager in Frameworks */ = {isa = PBXBuildFile; productRef = C0DEC0DE0000000000000003 /* CollapsiblePager */; };
+		C0DEC0DE0000000000000004 /* Refreshable in Frameworks */ = {isa = PBXBuildFile; productRef = C0DEC0DE0000000000000006 /* Refreshable */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -70,6 +71,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C0DEC0DE0000000000000001 /* CollapsiblePager in Frameworks */,
+				C0DEC0DE0000000000000004 /* Refreshable in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -131,6 +133,7 @@
 			name = Examples;
 			packageProductDependencies = (
 				C0DEC0DE0000000000000003 /* CollapsiblePager */,
+				C0DEC0DE0000000000000006 /* Refreshable */,
 			);
 			productName = Examples;
 			productReference = 77E4F35D2FF7BEBF00622135 /* Examples.app */;
@@ -216,6 +219,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				C0DEC0DE0000000000000002 /* XCLocalSwiftPackageReference ".." */,
+				C0DEC0DE0000000000000005 /* XCRemoteSwiftPackageReference "Refreshable" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 77E4F35E2FF7BEBF00622135 /* Products */;
@@ -595,6 +599,17 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		C0DEC0DE0000000000000005 /* XCRemoteSwiftPackageReference "Refreshable" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/astralchen/Refreshable.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCLocalSwiftPackageReference section */
 		C0DEC0DE0000000000000002 /* XCLocalSwiftPackageReference ".." */ = {
 			isa = XCLocalSwiftPackageReference;
@@ -607,6 +622,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C0DEC0DE0000000000000002 /* XCLocalSwiftPackageReference ".." */;
 			productName = CollapsiblePager;
+		};
+		C0DEC0DE0000000000000006 /* Refreshable */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0DEC0DE0000000000000005 /* XCRemoteSwiftPackageReference "Refreshable" */;
+			productName = Refreshable;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

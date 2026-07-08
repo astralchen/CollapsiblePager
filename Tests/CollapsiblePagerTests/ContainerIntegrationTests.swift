@@ -49,6 +49,70 @@ import UIKit
 }
 
 @MainActor
+@Test func statusBarScrollsToTopUsesContainerWhenHeaderIsNotPinned() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let currentScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let neighborScrollView = try #require(pager.childScrollViewForTesting(at: 1))
+
+    #expect(pager.collapseProgressForTesting == 0)
+    #expect(pager.containerRefreshHostScrollViewForTesting.scrollsToTop)
+    #expect(currentScrollView.scrollsToTop == false)
+    #expect(neighborScrollView.scrollsToTop == false)
+}
+
+@MainActor
+@Test func partiallyCollapsedStatusBarTapCanReachContainerHost() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let currentScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    currentScrollView.contentSize = CGSize(width: 390, height: 1_200)
+    currentScrollView.setContentOffset(CGPoint(x: 0, y: -252), animated: false)
+    pager.view.layoutIfNeeded()
+
+    let host = pager.containerRefreshHostScrollViewForTesting
+    #expect(pager.collapseProgressForTesting > 0)
+    #expect(pager.collapseProgressForTesting < 1)
+    #expect(host.scrollsToTop)
+    #expect(host.contentOffset.y > -host.adjustedContentInset.top)
+    #expect(currentScrollView.scrollsToTop == false)
+}
+
+@MainActor
+@Test func statusBarScrollsToTopUsesVisibleChildOnlyWhenHeaderIsPinned() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let currentScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let neighborScrollView = try #require(pager.childScrollViewForTesting(at: 1))
+    currentScrollView.contentSize = CGSize(width: 390, height: 1_200)
+    currentScrollView.setContentOffset(CGPoint(x: 0, y: -48), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.collapseProgressForTesting == 1)
+    #expect(pager.containerRefreshHostScrollViewForTesting.scrollsToTop == false)
+    #expect(currentScrollView.scrollsToTop)
+    #expect(neighborScrollView.scrollsToTop == false)
+}
+
+@MainActor
 @Test func reloadDataClampsSelectionWhenPageCountShrinks() {
     let pager = CollapsiblePagerViewController()
     let dataSource = DemoDataSource(pageCount: 3)
@@ -115,6 +179,117 @@ import UIKit
     #expect(pager.selectedIndex == 2)
     #expect(pager.effectiveSelectedIndex == 2)
     #expect(delegate.selectedIndexes == [1, 2])
+}
+
+@MainActor
+@Test func tabTapBackToCurrentSelectionCancelsPendingPageTransition() {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    let delegate = SelectionRecorder()
+    pager.dataSource = dataSource
+    pager.delegate = delegate
+    pager.reloadData()
+
+    pager.tapTabItemForTesting(at: 1)
+    pager.tapTabItemForTesting(at: 0)
+
+    #expect(pager.selectedIndex == 0)
+    #expect(pager.effectiveSelectedIndex == 0)
+    #expect(delegate.selectedIndexes.isEmpty)
+
+    pager.completePendingPageTransitionForTesting(targetIndex: 1)
+
+    #expect(pager.selectedIndex == 0)
+    #expect(pager.effectiveSelectedIndex == 0)
+    #expect(delegate.selectedIndexes.isEmpty)
+}
+
+@MainActor
+@Test func repeatedTabTapToSettledPendingTargetCommitsSelectionAfterMissedAnimationCompletion() {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    let delegate = SelectionRecorder()
+    pager.dataSource = dataSource
+    pager.delegate = delegate
+    pager.reloadData()
+
+    pager.selectPage(at: 2, animated: false)
+    pager.tapTabItemForTesting(at: 1)
+    pager.updatePagePositionForTesting(PagePosition.make(rawPosition: 1, pageCount: 3, isInteractive: false))
+
+    pager.tapTabItemForTesting(at: 1)
+
+    #expect(pager.selectedIndex == 1)
+    #expect(pager.effectiveSelectedIndex == 1)
+    #expect(delegate.selectedIndexes == [2, 1])
+}
+
+@MainActor
+@Test func gestureOvershootCompletionCommitsVisibleSettledPage() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    let delegate = SelectionRecorder()
+    pager.dataSource = dataSource
+    pager.delegate = delegate
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let longScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    longScrollView.contentSize = CGSize(width: 390, height: 1200)
+    longScrollView.setContentOffset(CGPoint(x: 0, y: -48), animated: false)
+    pager.view.layoutIfNeeded()
+
+    pager.selectPage(at: 2, animated: false)
+    pager.view.layoutIfNeeded()
+
+    pager.updatePagePositionForTesting(PagePosition.make(rawPosition: 1.94, pageCount: 3, isInteractive: true))
+    pager.updatePagePositionForTesting(PagePosition.make(rawPosition: 0.99, pageCount: 3, isInteractive: true))
+    pager.updatePagePositionForTesting(PagePosition.make(rawPosition: 1, pageCount: 3, isInteractive: false))
+    pager.completePendingPageTransitionForTesting(targetIndex: 1)
+
+    let shortScrollView = try #require(pager.childScrollViewForTesting(at: 1))
+    #expect(pager.selectedIndex == 1)
+    #expect(pager.effectiveSelectedIndex == 1)
+    #expect(delegate.selectedIndexes == [2, 1])
+    #expect(pager.collapseProgressForTesting == 1)
+    #expect(shortScrollView.contentOffset.y == -48)
+}
+
+@MainActor
+@Test func gestureSelectionAdoptsTargetChildOffsetAsPinAnchor() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let longScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let shortScrollView = try #require(pager.childScrollViewForTesting(at: 1))
+    longScrollView.contentSize = CGSize(width: 390, height: 1200)
+    shortScrollView.contentSize = CGSize(width: 390, height: 1200)
+
+    longScrollView.setContentOffset(CGPoint(x: 0, y: -231), animated: false)
+    pager.view.layoutIfNeeded()
+    let sourceCollapseProgress = pager.collapseProgressForTesting
+    #expect(abs(sourceCollapseProgress - (77.0 / 260.0)) < 0.001)
+
+    shortScrollView.setContentOffset(CGPoint(x: 0, y: -141), animated: false)
+    pager.view.layoutIfNeeded()
+
+    pager.updatePagePositionForTesting(PagePosition.make(rawPosition: 0.94, pageCount: 3, isInteractive: true))
+    pager.updatePagePositionForTesting(PagePosition.make(rawPosition: 1, pageCount: 3, isInteractive: false))
+    pager.completePendingPageTransitionForTesting(targetIndex: 1)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.selectedIndex == 1)
+    #expect(pager.effectiveSelectedIndex == 1)
+    #expect(shortScrollView.contentOffset.y == -141)
+    #expect(abs(pager.collapseProgressForTesting - (167.0 / 260.0)) < 0.001)
+    #expect(abs(pager.tabBarFrameForTesting.minY - 93) < 0.001)
 }
 
 @MainActor
@@ -362,7 +537,7 @@ import UIKit
 }
 
 @MainActor
-@Test func tabBarSelectionToEmptyPageKeepsPinnedHeaderState() throws {
+@Test func tabBarSelectionToUnvisitedEmptyPagePreservesPinnedHeaderPosition() throws {
     let pager = CollapsiblePagerViewController()
     let dataSource = DemoDataSource(pageCount: 3)
     pager.dataSource = dataSource
@@ -388,6 +563,35 @@ import UIKit
     #expect(pager.collapseProgressForTesting == 1)
     #expect(pager.tabBarFrameForTesting.minY == 0)
     #expect(emptyScrollView.contentOffset.y == -48)
+}
+
+@MainActor
+@Test func tabBarSelectionToUnvisitedPagePreservesPartiallyCollapsedHeaderPosition() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let longScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    longScrollView.contentSize = CGSize(width: 390, height: 1200)
+    longScrollView.setContentOffset(CGPoint(x: 0, y: -252), animated: false)
+    pager.view.layoutIfNeeded()
+
+    let initialCollapseProgress = pager.collapseProgressForTesting
+    let initialTabBarMinY = pager.tabBarFrameForTesting.minY
+
+    pager.tapTabItemForTesting(at: 2)
+    pager.view.layoutIfNeeded()
+
+    let emptyScrollView = try #require(pager.childScrollViewForTesting(at: 2))
+    #expect(pager.selectedIndex == 2)
+    #expect(pager.effectiveSelectedIndex == 2)
+    #expect(abs(pager.collapseProgressForTesting - initialCollapseProgress) < 0.001)
+    #expect(abs(pager.tabBarFrameForTesting.minY - initialTabBarMinY) < 0.001)
+    #expect(emptyScrollView.contentOffset.y == -252)
 }
 
 @MainActor
@@ -426,6 +630,52 @@ import UIKit
 }
 
 @MainActor
+@Test func tabBarSelectionToVisitedPartiallyCollapsedPagePreservesCurrentHeaderPosition() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let longScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    longScrollView.contentSize = CGSize(width: 390, height: 1200)
+    longScrollView.setContentOffset(CGPoint(x: 0, y: -252), animated: false)
+    pager.view.layoutIfNeeded()
+
+    pager.tapTabItemForTesting(at: 1)
+    pager.completePendingPageTransitionForTesting(targetIndex: 1)
+    pager.view.layoutIfNeeded()
+
+    let shortScrollView = try #require(pager.childScrollViewForTesting(at: 1))
+    #expect(shortScrollView.contentOffset.y == -252)
+
+    pager.tapTabItemForTesting(at: 0)
+    pager.completePendingPageTransitionForTesting(targetIndex: 0)
+    pager.view.layoutIfNeeded()
+
+    let returnedLongScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    returnedLongScrollView.contentSize = CGSize(width: 390, height: 1200)
+    returnedLongScrollView.setContentOffset(CGPoint(x: 0, y: -308), animated: false)
+    pager.view.layoutIfNeeded()
+
+    let expandedCollapseProgress = pager.collapseProgressForTesting
+    let expandedTabBarMinY = pager.tabBarFrameForTesting.minY
+    #expect(expandedCollapseProgress == 0)
+
+    pager.tapTabItemForTesting(at: 1)
+    pager.completePendingPageTransitionForTesting(targetIndex: 1)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.selectedIndex == 1)
+    #expect(pager.effectiveSelectedIndex == 1)
+    #expect(abs(pager.collapseProgressForTesting - expandedCollapseProgress) < 0.001)
+    #expect(abs(pager.tabBarFrameForTesting.minY - expandedTabBarMinY) < 0.001)
+    #expect(shortScrollView.contentOffset.y == -308)
+}
+
+@MainActor
 @Test func tabBarSelectionBackFromEmptyRestoresUnloadedLongChildOffset() throws {
     let pager = CollapsiblePagerViewController()
     let dataSource = DemoDataSource(pageCount: 3)
@@ -457,6 +707,48 @@ import UIKit
     #expect(pager.effectiveSelectedIndex == 0)
     #expect(pager.collapseProgressForTesting == 1)
     #expect(returnedLongScrollView.contentOffset.y == preservedOffsetY)
+}
+
+@MainActor
+@Test func tabBarSelectionBackFromExpandedEmptyDoesNotReplayStaleLongOffset() throws {
+    let pager = CollapsiblePagerViewController()
+    let dataSource = DemoDataSource(pageCount: 3)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let longScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let staleOffsetY: CGFloat = 520
+    let expandedOffsetY: CGFloat = -308
+    longScrollView.contentSize = CGSize(width: 390, height: 2000)
+    longScrollView.setContentOffset(CGPoint(x: 0, y: staleOffsetY), animated: false)
+    pager.view.layoutIfNeeded()
+
+    pager.tapTabItemForTesting(at: 2)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.loadedChildIndexesForTesting == [1, 2])
+
+    let emptyScrollView = try #require(pager.childScrollViewForTesting(at: 2))
+    emptyScrollView.setContentOffset(CGPoint(x: 0, y: expandedOffsetY), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.collapseProgressForTesting == 0)
+
+    pager.tapTabItemForTesting(at: 0)
+    pager.view.layoutIfNeeded()
+
+    let returnedLongScrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    returnedLongScrollView.contentSize = CGSize(width: 390, height: 2100)
+    returnedLongScrollView.setContentOffset(CGPoint(x: 0, y: staleOffsetY), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(pager.selectedIndex == 0)
+    #expect(pager.effectiveSelectedIndex == 0)
+    #expect(pager.collapseProgressForTesting == 0)
+    #expect(returnedLongScrollView.contentOffset.y == expandedOffsetY)
 }
 
 @MainActor
@@ -1238,6 +1530,125 @@ import UIKit
     host.scrollViewDidEndDragging(host, willDecelerate: false)
     #expect(pager.activeRefreshHandoffForTesting == nil)
     #expect(host.contentOffset.y == host.neutralBaselineContentOffsetY)
+}
+
+@MainActor
+@Test func upwardHeaderPanAtExpandedTopRoutesHostDeltaToCurrentChild() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let host = try #require(
+        pager.containerRefreshHostScrollViewForTesting as? CollapsiblePagerContainerRefreshHostScrollView
+    )
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.setContentOffset(CGPoint(x: 0, y: -308), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(
+        pager.shouldBeginContainerRefreshHostPanForTesting(
+            translation: CGSize(width: 0, height: -24),
+            velocity: CGSize(width: 0, height: -600),
+            location: CGPoint(x: pager.view.bounds.midX, y: pager.headerFrameForTesting.midY)
+        )
+    )
+
+    host.setContentOffset(CGPoint(x: 0, y: host.neutralBaselineContentOffsetY + 36), animated: false)
+    host.scrollViewDidScroll(host)
+    pager.view.layoutIfNeeded()
+
+    #expect(host.contentOffset.y == host.neutralBaselineContentOffsetY)
+    #expect(scrollView.contentOffset.y > -308)
+    #expect(pager.collapseProgressForTesting > 0)
+}
+
+@MainActor
+@Test func upwardHeaderPanKeepsHostAtBaselineForRemainingGesture() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let host = try #require(
+        pager.containerRefreshHostScrollViewForTesting as? CollapsiblePagerContainerRefreshHostScrollView
+    )
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.setContentOffset(CGPoint(x: 0, y: -308), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(
+        pager.shouldBeginContainerRefreshHostPanForTesting(
+            translation: CGSize(width: 0, height: -18),
+            velocity: CGSize(width: 0, height: -500),
+            location: CGPoint(x: pager.view.bounds.midX, y: pager.headerFrameForTesting.midY)
+        )
+    )
+
+    host.setContentOffset(CGPoint(x: 0, y: host.neutralBaselineContentOffsetY + 12), animated: false)
+    host.scrollViewDidScroll(host)
+    let routedChildOffsetY = scrollView.contentOffset.y
+
+    host.setContentOffset(CGPoint(x: 0, y: host.neutralBaselineContentOffsetY - 24), animated: false)
+    host.scrollViewDidScroll(host)
+    pager.view.layoutIfNeeded()
+
+    #expect(host.contentOffset.y == host.neutralBaselineContentOffsetY)
+    #expect(pager.activeRefreshHandoffForTesting == nil)
+    #expect(scrollView.contentOffset.y == routedChildOffsetY)
+}
+
+@MainActor
+@Test func upwardHeaderPanContinuesRoutingAfterHeaderStartsCollapsing() throws {
+    var configuration = CollapsiblePagerConfiguration.default
+    configuration.refreshHandoffMode = .container
+    let pager = CollapsiblePagerViewController(configuration: configuration)
+    let dataSource = DemoDataSource(pageCount: 1)
+    pager.dataSource = dataSource
+    pager.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
+    pager.reloadData()
+    pager.view.layoutIfNeeded()
+
+    let scrollView = try #require(pager.childScrollViewForTesting(at: 0))
+    let host = try #require(
+        pager.containerRefreshHostScrollViewForTesting as? CollapsiblePagerContainerRefreshHostScrollView
+    )
+    scrollView.contentSize = CGSize(width: 390, height: 2000)
+    scrollView.setContentOffset(CGPoint(x: 0, y: -308), animated: false)
+    pager.view.layoutIfNeeded()
+
+    #expect(
+        pager.shouldBeginContainerRefreshHostPanForTesting(
+            translation: CGSize(width: 0, height: -18),
+            velocity: CGSize(width: 0, height: -500),
+            location: CGPoint(x: pager.view.bounds.midX, y: pager.headerFrameForTesting.midY)
+        )
+    )
+
+    host.setContentOffset(CGPoint(x: 0, y: host.neutralBaselineContentOffsetY + 8), animated: false)
+    host.scrollViewDidScroll(host)
+    let firstRoutedOffsetY = scrollView.contentOffset.y
+    #expect(pager.collapseProgressForTesting > 0)
+
+    host.setContentOffset(CGPoint(x: 0, y: host.neutralBaselineContentOffsetY + 11), animated: false)
+    host.scrollViewDidScroll(host)
+    pager.view.layoutIfNeeded()
+
+    #expect(host.contentOffset.y == host.neutralBaselineContentOffsetY)
+    #expect(scrollView.contentOffset.y > firstRoutedOffsetY)
 }
 
 @MainActor

@@ -462,20 +462,47 @@ final class DemoPagerDataSource: NSObject, CollapsiblePagerViewControllerDataSou
         var rowCount: Int
         var refreshTitle: String?
         var accessibilityID: String
+        var loadMoreConfiguration: DemoLoadMoreConfiguration? = nil
     }
+
+    private static let defaultPages = [
+        Page(
+            title: "Long",
+            rowCount: 60,
+            refreshTitle: nil,
+            accessibilityID: "demo-list-long",
+            loadMoreConfiguration: DemoLoadMoreConfiguration(
+                batchSize: 4,
+                maximumAdditionalRows: 12,
+                delayNanoseconds: 550_000_000
+            )
+        ),
+        Page(title: "Short", rowCount: 8, refreshTitle: nil, accessibilityID: "demo-list-short"),
+        Page(title: "Empty", rowCount: 0, refreshTitle: nil, accessibilityID: "demo-list-empty"),
+    ]
 
     let headerViewController = DemoHeaderViewController()
     var headerView: DemoHeaderView {
         headerViewController.headerView
     }
 
-    private let pages = [
-        Page(title: "Long", rowCount: 60, refreshTitle: nil, accessibilityID: "demo-list-long"),
-        Page(title: "Short", rowCount: 8, refreshTitle: nil, accessibilityID: "demo-list-short"),
-        Page(title: "Empty", rowCount: 0, refreshTitle: nil, accessibilityID: "demo-list-empty"),
-    ]
+    private let pages: [Page]
+    private lazy var pageStates = pages.map {
+        DemoListPageState(
+            title: $0.title,
+            rowCount: $0.rowCount,
+            refreshTitle: $0.refreshTitle,
+            loadMoreConfiguration: $0.loadMoreConfiguration,
+            accessibilityID: $0.accessibilityID
+        )
+    }
     private let containerRefreshController = DemoRefreshController()
     private var hasConfiguredContainerRefreshHost = false
+
+    init(pages: [Page] = DemoPagerDataSource.defaultPages) {
+        self.pages = pages
+        super.init()
+    }
 
     func configureRefreshHost(for pager: CollapsiblePagerViewController) {
         guard !hasConfiguredContainerRefreshHost else {
@@ -487,21 +514,15 @@ final class DemoPagerDataSource: NSObject, CollapsiblePagerViewControllerDataSou
     }
 
     func numberOfPages(in pagerViewController: CollapsiblePagerViewController) -> Int {
-        pages.count
+        pageStates.count
     }
 
     func pagerViewController(_ pagerViewController: CollapsiblePagerViewController, titleForPageAt index: Int) -> String {
-        pages[index].title
+        pageStates[index].title
     }
 
     func pagerViewController(_ pagerViewController: CollapsiblePagerViewController, viewControllerForPageAt index: Int) -> UIViewController {
-        let page = pages[index]
-        return DemoListViewController(
-            title: page.title,
-            rowCount: page.rowCount,
-            refreshTitle: page.refreshTitle,
-            accessibilityID: page.accessibilityID
-        )
+        DemoListViewController(state: pageStates[index])
     }
 
     func headerContent(in pagerViewController: CollapsiblePagerViewController) -> CollapsiblePagerHeaderContent {
@@ -509,7 +530,7 @@ final class DemoPagerDataSource: NSObject, CollapsiblePagerViewControllerDataSou
     }
 
     func pagerViewController(_ pagerViewController: CollapsiblePagerViewController, didSelectPageAt index: Int) {
-        headerView.setSelectionText("Selected: \(pages[index].title)")
+        headerView.setSelectionText("Selected: \(pageStates[index].title)")
     }
 
     func pagerViewController(_ pagerViewController: CollapsiblePagerViewController, didUpdateCollapseProgress progress: CGFloat) {

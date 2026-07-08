@@ -58,6 +58,35 @@ import Testing
     #expect(state.pendingSelectedIndex == nil)
 }
 
+@Test func repeatedRequestToSamePendingTargetKeepsCurrentPagePosition() {
+    var state = CollapsiblePagerState.initial(pageCount: 3)
+    let pipeline = PageRequestPipeline()
+
+    #expect(pipeline.request(.init(source: .tabTap, fromIndex: 0, targetIndex: 1, animated: true), state: &state))
+    let inFlightPosition = PagePosition.make(rawPosition: 0.67, pageCount: 3, isInteractive: false)
+    state.pagePosition = inFlightPosition
+
+    #expect(pipeline.request(.init(source: .tabTap, fromIndex: 0, targetIndex: 1, animated: true), state: &state) == false)
+    #expect(state.selectedIndex == 0)
+    #expect(state.effectiveSelectedIndex == 0)
+    #expect(state.pendingSelectedIndex == 1)
+    #expect(state.pagePosition == inFlightPosition)
+}
+
+@Test func requestBackToCurrentSelectionCancelsPendingTarget() {
+    var state = CollapsiblePagerState.initial(pageCount: 3)
+    let pipeline = PageRequestPipeline()
+
+    #expect(pipeline.request(.init(source: .tabTap, fromIndex: 0, targetIndex: 1, animated: true), state: &state))
+    #expect(pipeline.request(.init(source: .tabTap, fromIndex: 0, targetIndex: 0, animated: true), state: &state))
+
+    #expect(state.selectedIndex == 0)
+    #expect(state.effectiveSelectedIndex == 0)
+    #expect(state.pendingSelectedIndex == nil)
+    #expect(state.pendingPageRequestSource == nil)
+    #expect(state.pagePosition == PagePosition.make(rawPosition: 0, pageCount: 3, isInteractive: false))
+}
+
 @Test func staleTransitionCompletionDoesNotCommitSupersededTarget() {
     var state = CollapsiblePagerState.initial(pageCount: 3)
     let pipeline = PageRequestPipeline()
@@ -70,4 +99,23 @@ import Testing
     #expect(state.selectedIndex == 0)
     #expect(state.effectiveSelectedIndex == 0)
     #expect(state.pendingSelectedIndex == 2)
+}
+
+@Test func gestureCompletionCommitsSettledIntermediatePageAfterOvershootingPendingTarget() {
+    var state = CollapsiblePagerState.initial(pageCount: 3)
+    state.selectedIndex = 2
+    state.effectiveSelectedIndex = 2
+    state.pagePosition = PagePosition.make(rawPosition: 2, pageCount: 3, isInteractive: false)
+    let pipeline = PageRequestPipeline()
+
+    #expect(pipeline.request(.init(source: .gesture, fromIndex: 2, targetIndex: 1, animated: true), state: &state))
+    #expect(pipeline.request(.init(source: .gesture, fromIndex: 2, targetIndex: 0, animated: true), state: &state))
+    state.pagePosition = PagePosition.make(rawPosition: 1, pageCount: 3, isInteractive: false)
+
+    let result = pipeline.complete(targetIndex: 1, state: &state)
+
+    #expect(result == .committed)
+    #expect(state.selectedIndex == 1)
+    #expect(state.effectiveSelectedIndex == 1)
+    #expect(state.pendingSelectedIndex == nil)
 }

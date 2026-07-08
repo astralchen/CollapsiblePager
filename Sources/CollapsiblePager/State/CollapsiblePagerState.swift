@@ -4,6 +4,7 @@ struct CollapsiblePagerState: Sendable, Equatable {
     var selectedIndex: Int
     var effectiveSelectedIndex: Int?
     var pendingSelectedIndex: Int?
+    var pendingPageRequestSource: PageRequestSource?
     var pageCount: Int
     var pagePosition: PagePosition?
     var pinAnchorY: CGFloat
@@ -14,6 +15,7 @@ struct CollapsiblePagerState: Sendable, Equatable {
             selectedIndex: 0,
             effectiveSelectedIndex: clampedPageCount == 0 ? nil : 0,
             pendingSelectedIndex: nil,
+            pendingPageRequestSource: nil,
             pageCount: clampedPageCount,
             pagePosition: PagePosition.make(rawPosition: 0, pageCount: clampedPageCount, isInteractive: false),
             pinAnchorY: 0

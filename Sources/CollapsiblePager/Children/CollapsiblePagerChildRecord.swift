@@ -10,6 +10,7 @@ final class CollapsiblePagerChildRecord {
     let baseScrollIndicatorInsets: UIEdgeInsets
     let baseShowsVerticalScrollIndicator: Bool
     let baseShowsHorizontalScrollIndicator: Bool
+    var lastManagedContentInset: UIEdgeInsets
     var lastKnownContentOffsetY: CGFloat
 
     init(
@@ -21,6 +22,7 @@ final class CollapsiblePagerChildRecord {
         baseScrollIndicatorInsets: UIEdgeInsets = .zero,
         baseShowsVerticalScrollIndicator: Bool = true,
         baseShowsHorizontalScrollIndicator: Bool = true,
+        lastManagedContentInset: UIEdgeInsets = .zero,
         lastKnownContentOffsetY: CGFloat
     ) {
         self.index = index
@@ -31,6 +33,7 @@ final class CollapsiblePagerChildRecord {
         self.baseScrollIndicatorInsets = baseScrollIndicatorInsets
         self.baseShowsVerticalScrollIndicator = baseShowsVerticalScrollIndicator
         self.baseShowsHorizontalScrollIndicator = baseShowsHorizontalScrollIndicator
+        self.lastManagedContentInset = lastManagedContentInset
         self.lastKnownContentOffsetY = lastKnownContentOffsetY
     }
 }

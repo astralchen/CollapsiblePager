@@ -30,6 +30,7 @@ struct CollapsiblePagerLayoutEngine: Sendable {
             height: max(0, tabBarFrame.minY - headerTopY)
         )
         let managedTopInset = headerHeights.maxHeight + tabBarHeight
+        let managedBottomInset = max(0, input.safeAreaInsets.bottom, input.bottomObstructionInset)
 
         return CollapsiblePagerLayoutOutput(
             pageContainerFrame: CGRect(
@@ -42,7 +43,7 @@ struct CollapsiblePagerLayoutEngine: Sendable {
             headerVisibleHeight: headerVisibleHeight,
             collapseProgress: collapseProgress,
             tabBarFrame: tabBarFrame,
-            childContentInset: CollapsiblePagerEdgeInsets(top: managedTopInset, bottom: input.safeAreaInsets.bottom),
+            childContentInset: CollapsiblePagerEdgeInsets(top: managedTopInset, bottom: managedBottomInset),
             pinThreshold: pinThreshold
         )
     }

@@ -4,9 +4,15 @@ import UIKit
 final class CollapsiblePagerContainerRefreshHostScrollView: UIScrollView, UIScrollViewDelegate {
     var shouldBeginRefreshPan: (@MainActor (UIPanGestureRecognizer) -> Bool)?
     var onRefreshPanWillBegin: (@MainActor () -> Void)?
+    var onShouldScrollToTop: (@MainActor (UIScrollView) -> Bool)?
     var onDidScroll: (@MainActor (UIScrollView) -> Void)?
     var onScrollInteractionDidEnd: (@MainActor (UIScrollView) -> Void)?
     private var configuredRefreshBaselineTop: CGFloat = 0
+    private var statusBarScrollToTopActivationInset: CGFloat = 0
+
+    private var effectiveNeutralContentInsetTop: CGFloat {
+        configuredRefreshBaselineTop + statusBarScrollToTopActivationInset
+    }
 
     var neutralBaselineContentOffsetY: CGFloat {
         -configuredRefreshBaselineTop
@@ -61,7 +67,24 @@ final class CollapsiblePagerContainerRefreshHostScrollView: UIScrollView, UIScro
     }
 
     func usesNeutralRefreshContentInset() -> Bool {
-        abs(contentInset.top - configuredRefreshBaselineTop) < 0.5
+        abs(contentInset.top - effectiveNeutralContentInsetTop) < 0.5
+    }
+
+    func setStatusBarScrollToTopActivationEnabled(_ isEnabled: Bool) {
+        let nextInset: CGFloat = isEnabled ? 1 : 0
+        guard abs(nextInset - statusBarScrollToTopActivationInset) >= 0.5 else {
+            return
+        }
+
+        let previousBaseline = neutralBaselineContentOffsetY
+        let offsetFromBaseline = contentOffset.y - previousBaseline
+        statusBarScrollToTopActivationInset = nextInset
+        applyEffectiveNeutralContentInsetTop()
+        updateContentSizeForCurrentBaseline()
+        setContentOffset(
+            CGPoint(x: 0, y: neutralBaselineContentOffsetY + min(0, offsetFromBaseline)),
+            animated: false
+        )
     }
 
     func updateRefreshBaselineTop(_ top: CGFloat) {
@@ -73,10 +96,7 @@ final class CollapsiblePagerContainerRefreshHostScrollView: UIScrollView, UIScro
         let previousBaseline = neutralBaselineContentOffsetY
         let offsetFromBaseline = contentOffset.y - previousBaseline
         configuredRefreshBaselineTop = nextTop
-
-        var nextInset = contentInset
-        nextInset.top = nextTop
-        contentInset = nextInset
+        applyEffectiveNeutralContentInsetTop()
 
         let nextBaseline = neutralBaselineContentOffsetY
         updateContentSizeForCurrentBaseline()
@@ -98,6 +118,10 @@ final class CollapsiblePagerContainerRefreshHostScrollView: UIScrollView, UIScro
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         onDidScroll?(scrollView)
+    }
+
+    func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+        onShouldScrollToTop?(scrollView) ?? true
     }
 
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
@@ -138,5 +162,15 @@ final class CollapsiblePagerContainerRefreshHostScrollView: UIScrollView, UIScro
         }
 
         contentSize = nextContentSize
+    }
+
+    private func applyEffectiveNeutralContentInsetTop() {
+        var nextInset = contentInset
+        nextInset.top = effectiveNeutralContentInsetTop
+        guard contentInset != nextInset else {
+            return
+        }
+
+        contentInset = nextInset
     }
 }

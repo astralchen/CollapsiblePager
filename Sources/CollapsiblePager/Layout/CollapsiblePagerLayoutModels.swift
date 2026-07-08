@@ -38,6 +38,7 @@ struct CollapsiblePagerHeaderHeights: Sendable, Equatable {
 struct CollapsiblePagerLayoutInput: Sendable, Equatable {
     var containerBounds: CGRect
     var safeAreaInsets: CollapsiblePagerEdgeInsets
+    var bottomObstructionInset: CGFloat
     var navigationBarMaxY: CGFloat?
     var headerHeights: CollapsiblePagerHeaderHeights
     var headerTopBehavior: CollapsiblePagerHeaderTopBehavior
@@ -49,6 +50,7 @@ struct CollapsiblePagerLayoutInput: Sendable, Equatable {
     init(
         containerBounds: CGRect,
         safeAreaInsets: CollapsiblePagerEdgeInsets,
+        bottomObstructionInset: CGFloat = 0,
         navigationBarMaxY: CGFloat?,
         headerHeights: CollapsiblePagerHeaderHeights,
         headerTopBehavior: CollapsiblePagerHeaderTopBehavior = .insideSafeArea,
@@ -59,6 +61,7 @@ struct CollapsiblePagerLayoutInput: Sendable, Equatable {
     ) {
         self.containerBounds = containerBounds
         self.safeAreaInsets = safeAreaInsets
+        self.bottomObstructionInset = bottomObstructionInset
         self.navigationBarMaxY = navigationBarMaxY
         self.headerHeights = headerHeights
         self.headerTopBehavior = headerTopBehavior

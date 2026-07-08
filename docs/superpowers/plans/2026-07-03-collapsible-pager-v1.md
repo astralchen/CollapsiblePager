@@ -3260,6 +3260,635 @@ git diff --check
 
 Actual: 定向 UI test 通过，覆盖从 `.none` 依次切换到 `.container` 和 `.child`；Examples Swift Testing 实际执行 4 个测试并通过；`git diff --check` 无输出。
 
+## 2026-07-06 示例 App 接入 Refreshable 底部加载更多
+
+用户要求示例应用接入 `astralchen/Refreshable` 并验证底部上拉刷新。
+
+调整：
+
+- `Examples` target 增加远程 Swift Package 依赖 `https://github.com/astralchen/Refreshable.git`，当前通过 `main` 分支引用，`Package.resolved` 固定到 `d445cf96c23665433ba35246aebabd7985f0db14`。
+- `DemoListViewController` 增加可选 `DemoLoadMoreConfiguration`；配置存在时调用 `tableView.loadMoreable(options:)` 安装底部加载更多。
+- 根 Pager 的 `Long` child 启用底部加载更多，每次追加 4 行，最多追加 12 行；`Short` 和 `Empty` 不安装 load-more，避免干扰短内容和空内容场景。
+- 示例顶部刷新仍使用系统 `UIRefreshControl`；核心包仍不依赖 Refreshable，也不创建、结束或代理具体刷新任务。
+- 新增 Swift Testing 单元测试 `longListUsesRefreshableBottomLoadMoreToAppendRows()`，用 `beginLoadingMore()` 覆盖 Refreshable action 与数据追加。
+- 新增 UI test `testLongListBottomPullLoadsMoreRows()`，滚动到 `Long` 列表底部后执行上拉手势，并断言 `Long row 64` 出现。
+
+Red:
+
+```sh
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'generic/platform=iOS Simulator' -quiet build-for-testing
+```
+
+Actual: `TEST BUILD FAILED`，新增测试找不到 `DemoLoadMoreConfiguration`，并提示 `loadMoreConfiguration` 是多余参数，证明测试先于实现。
+
+Verification:
+
+```sh
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'generic/platform=iOS Simulator' -quiet build-for-testing
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -only-testing:ExamplesTests test
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -only-testing:ExamplesUITests/ExamplesUITests/testLongListBottomPullLoadsMoreRows test
+```
+
+Actual: build-for-testing exit code 0；`ExamplesTests` 实际执行 5 个测试并通过；定向 UI test 通过，覆盖真实底部上拉加载更多路径。
+
+## 2026-07-07 底部遮挡与第三方 footer inset 系统修复
+
+用户反馈 Refreshable 上拉刷新正常，但达到 `noMoreData()` 后“没有更多数据”提示没有显示在底部安全区域内，而是被底部浮动 TabBar 视觉区域遮挡。
+
+Root cause 有两层：
+
+- Pager 的 child bottom inset 只来自 `view.safeAreaInsets.bottom`。当外层容器存在可见底部遮挡，尤其是浮动形态的 `UITabBar`，safe area 不一定覆盖完整视觉遮挡区域。
+- Refreshable 在 `noMoreData()` / footer 状态里会在 scroll view 当前 `contentInset.bottom` 之上追加 footer 空间。Pager 监听到 `contentSize` 变化后会调用 `ChildStore.updateManagedInset`，旧实现按 `baseContentInset + managedInset` 整体重写 `contentInset.bottom`，把第三方追加的 footer inset 抹掉。
+
+调整：
+
+- `CollapsiblePagerLayoutInput` 新增 `bottomObstructionInset`，layout output 的 `childContentInset.bottom` 取 `safeArea.bottom` 与可见底部遮挡的最大值。
+- `CollapsiblePagerViewController` 从可见 `tabBarController?.tabBar` 与 pager view 的交集推导 bottom obstruction；业务方设置的 `additionalSafeAreaInsets.bottom` 仍会通过 `view.safeAreaInsets.bottom` 自然生效。
+- `CollapsiblePagerChildRecord` 记录上一次 Pager 写入的 managed content inset 基线。
+- `CollapsiblePagerChildStore.updateManagedInset` 只替换 Pager 自己的 managed 基线，并保留当前 `contentInset.bottom - lastManagedContentInset.bottom` 的正向外部增量。vertical scroll indicator bottom inset 仍只跟随 Pager layout bottom inset，不继承第三方 footer 空间。
+- `UITableView.setContentInset` 会同步触发 `contentSize` KVO 并重入 `updateManagedInset`。因此 ChildStore 必须先计算并提交新的 managed content inset 基线，再写回 `UIScrollView.contentInset`；否则重入路径会把 Pager 自己刚写入的 bottom inset 误判为外部 footer 增量并不断放大。
+- UI 回归 `testLongListBottomPullLoadsMoreRowsAndShowsNoMoreDataAboveTabBar` 扩展到加载到最后一批数据后检查 “没有更多数据” 不进入底部 TabBar 区域；同时显式回到 Pager tab，避免单跑 UI test 时受模拟器场景状态影响。
+
+Red:
+
+```sh
+xcodebuild -workspace .swiftpm/xcode/package.xcworkspace -scheme CollapsiblePager -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' test
+```
+
+Actual: 新增测试先于实现时无法编译或失败，覆盖 `bottomObstructionInset` 缺失和外部 bottom inset 被重写的问题。
+
+Verification:
+
+```sh
+xcodebuild -workspace .swiftpm/xcode/package.xcworkspace -scheme CollapsiblePager -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' test
+```
+
+Actual: 核心包 Swift Testing 实际执行 111 个测试并通过，新增 `layoutUsesBottomObstructionWhenItExceedsSafeArea`、`childStorePreservesExternalBottomInsetAddedAfterPagerManagement` 与 `childStoreDoesNotAmplifyExternalBottomInsetWhenContentInsetUpdateReenters` 均通过。
+
+Note: 当前环境运行 `Examples` scheme 的单元/UI 测试时，test runner 在启动阶段出现 `Early unexpected exit` 或 clone simulator 前台启动被 SpringBoard 拒绝；这不是业务断言失败。示例 App 和核心 package 可构建，核心测试已通过。UI 回归用例已保留，待模拟器测试环境稳定后继续验证。
+
+## 2026-07-07 横向手势过冲停靠页提交修复
+
+用户反馈从 `Empty` 横向回到 `Short` 后，TabBar 看起来停在 Short，但 `Short row 1` 前有大段空白，继续向上滚动也不像真正吸顶。日志关键形态：
+
+- 手势从 `selected=2 effective=2` 开始，先产生 `gestureRequest accepted ... target=1`。
+- 同一次拖拽继续过冲，`raw=0.99` 时 pending 被更新成 `0`。
+- PageContainer 最终稳定在 `index=1`，但 `transitionComplete begin target=1 selected=2 effective=2 pending=0` 随后被旧规则忽略。
+- 后续触摸 owner 已经是 `childScroll[1]`，而容器 selected/effective 仍是 `2`，导致 Header host、手势归属和 offset 对齐都处在不一致状态。
+
+Root cause：2026-07-06 为修快速连续 Tab/API 旧 completion 引入了“completion target 必须等于 pending target”的严格规则，但横向手势和程序化动画不同。手势可以在同一次拖拽中过冲到更远页，又因分页吸附最终停在中间页；此时稳定停靠页才是 PageContainer 的事实状态，不能按过期 completion 处理。
+
+调整：
+
+- `CollapsiblePagerState` 新增内部 `pendingPageRequestSource`，记录 pending selection 来自 Tab、API 还是手势。
+- `PageRequestPipeline.complete(targetIndex:)` 保留 Tab/API mismatch completion 的 ignored 语义，继续防止旧动画提交中间页。
+- 当 pending 来源是 `.gesture`，且当前 `PagePosition` 已稳定停在 completion target 时，提交实际停靠页，清空 pending selection 和 pending source。
+- 容器集成回归覆盖 `2 -> 1 -> 0` 过冲但最终停在 `1` 的场景，断言 `selectedIndex/effectiveSelectedIndex == 1`、delegate 收到 Short、collapse 保持吸顶、Short offset 为 `-48`。
+
+Red:
+
+```sh
+xcodebuild -workspace .swiftpm/xcode/package.xcworkspace -scheme CollapsiblePager -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' test
+```
+
+Actual: 新增 `gestureCompletionCommitsSettledIntermediatePageAfterOvershootingPendingTarget` 与 `gestureOvershootCompletionCommitsVisibleSettledPage` 在旧实现下失败，分别证明 pipeline 返回 `.ignored`、容器未提交到 Short。
+
+Verification:
+
+```sh
+xcodebuild -workspace .swiftpm/xcode/package.xcworkspace -scheme CollapsiblePager -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' test
+```
+
+Actual: 核心包 Swift Testing 实际执行 113 个测试并通过；此前防连续 Tab/API 旧 completion 的 `staleTransitionCompletionDoesNotCommitSupersededTarget` 与 `supersededAnimatedPageCompletionDoesNotCommitIntermediatePage` 仍通过。
+
+## 2026-07-07 示例 Empty 空态可见区域居中修复
+
+用户通过 Xcode 3D 图层调试指出高亮的子控制器 root view 的 `y` 比 `CollapsiblePagerTabBarView` 小，并反馈 `No rows in Empty` 视觉上没有居中。
+
+结论：child root view / page view 铺满 PageContainer viewport 是当前嵌套滚动模型的正常形态，不应通过下移 child frame 避让 Header/TabBar。Header/TabBar 占位由 child scroll view 的 managed inset 和 guarded contentOffset 表达；业务侧空态或 overlay 需要按当前可见内容区布局。
+
+Root cause：示例 `DemoListViewController` 直接把裸 `UILabel` 赋给 `UITableView.backgroundView`。在普通 table 页面这通常足够，但在 Pager 中 child root view 会位于 Header/TabBar 叠层之下，短/空内容还会带有 bottom inset 补偿；裸 background label 无法表达“排除 pinned Header/TabBar 与底部 TabBar 遮挡后的可见区域居中”。
+
+调整：
+
+- `DemoListViewController` 使用 `DemoEmptyStateBackgroundView` 包装空态 label，保留 `demo-list-empty-empty` accessibility identifier。
+- `viewDidLayoutSubviews` 与 `scrollViewDidScroll` 中根据 `contentOffset` 计算顶部可见起点，根据 `verticalScrollIndicatorInsets.bottom` 计算真实底部遮挡，并更新空态 label 的居中区域。
+- 空态底部避让只使用 scroll indicator bottom inset，避免把 Pager 为短/空内容添加的 bottom compensation 当成视觉遮挡。
+- 新增 `emptyListCentersEmptyStateBelowPinnedTabBarWhenCollapsed()`，模拟已吸顶、短内容补偿和底部遮挡组合，断言空态背景由示例层管理，且 label 在可见内容区居中。
+
+Red:
+
+```sh
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -only-testing:ExamplesTests test
+```
+
+Actual: 新增测试在旧实现下失败，其他 Examples 单元测试通过。
+
+Verification:
+
+```sh
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -only-testing:ExamplesTests test
+```
+
+Actual: `ExamplesTests` 实际执行 6 个测试并通过。
+
+## 2026-07-07 示例 Long 离屏 load-more 完成跳动修复
+
+用户反馈 `Long` 子控制器有跳动。日志中 `transitionComplete` 后 Long 页 `childOffsetY` 在多个较大值之间来回切换，且差值接近本示例 load-more 批量追加行高，说明问题发生在业务侧数据追加而不是 child frame。
+
+Root cause：`Refreshable.loadMoreable` 的异步 completion 在 Long 页已经离屏或切页过程中仍继续执行，随后 `DemoListViewController` 增加 `rowCount` 并调用 `tableView.reloadData()`。这会改变离屏 child 的 `contentSize`，并与 Pager 在 page 切换完成时对 selected child、managed inset 和 offset 的恢复逻辑竞争，视觉上表现为 Long 页跳动。
+
+调整：
+
+- `DemoListViewController` 增加页面可见性门禁；`viewDidAppear` 后才允许 load-more completion 追加数据。
+- `viewWillDisappear` 开始即关闭门禁并结束当前 Refreshable loading 状态。
+- completion 发现页面已不可见时只调用 `endLoadingMore()` 收尾，不修改 `rowCount`、不 `reloadData()`。
+- 新增 `offscreenLongListLoadMoreCompletionDoesNotAppendRows()`，模拟 Long 页开始加载更多后立刻离屏，断言异步完成不会追加行。
+
+Red:
+
+```sh
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -only-testing:ExamplesTests test
+```
+
+Actual: 新增测试在旧实现下失败，`tableView.numberOfRows(inSection: 0)` 从 60 变为 64，证明离屏 completion 仍会追加数据。
+
+Verification:
+
+```sh
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -only-testing:ExamplesTests test
+```
+
+Actual: `ExamplesTests` 实际执行 7 个测试并通过。
+
+## 2026-07-07 示例 Long 返回底部自动 load-more 修复
+
+用户反馈 Long 子控制器滚到底部并显示“没有更多数据”后，点击 Empty 再点击 Long，会看到底部刷新控件自动刷新或数据像被重置。
+
+Root cause：`RefreshableOptions.automaticTriggerOffset` 默认是 `.default`。对 bottom `loadMoreable` 来说，Refreshable 会在 `scrollViewDidScroll` 中先按“距离底部小于阈值”自动触发，再进入拖拽态判断。Pager 在切页完成和 layout 校准时会程序化恢复 Long 的 `contentOffset`；如果该 offset 位于底部或 no-more footer 附近，就会被 Refreshable 当作自动加载更多，而不是用户上拉手势。
+
+调整：
+
+- `DemoListViewController.configureLoadMore()` 将 `automaticTriggerOffset` 设为 `nil`，关闭滚动到边缘的自动触发。
+- 保留 `triggerOffset: 72`，用户真实上拉到底部后仍可触发 Refreshable load-more。
+- 继续保留离屏 completion 门禁，避免切页后异步完成修改离屏列表。
+- 新增 `programmaticBottomOffsetDoesNotAutomaticallyLoadMoreRows()`，模拟 Pager 程序化恢复到底部 offset，断言不会自动追加行。
+
+Red:
+
+```sh
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerExamplesAllTestsRed -only-testing:ExamplesTests test
+```
+
+Actual: 新增 `programmaticBottomOffsetDoesNotAutomaticallyLoadMoreRows()` 在旧实现下失败。
+
+Verification:
+
+```sh
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerExamplesProgrammaticLoadMoreGreen -only-testing:ExamplesTests test
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'generic/platform=iOS Simulator' -quiet build
+git diff --check
+```
+
+Actual: `ExamplesTests` 实际执行 8 个测试并通过；`Examples` scheme 构建通过；`git diff --check` 无输出。
+
+## 2026-07-07 示例 Long 切页后行数状态持久化修复
+
+用户补充确认问题是 Long 行数从 72 回到 60。日志同时显示切到 Empty 时 Long child 不再保留在当前 child window 内，回到 Long 后由 data source 再次创建 child。
+
+Root cause：示例 `DemoListViewController` 把 `rowCount` 和 `loadedAdditionalRows` 存在 child controller 实例里。Pager 按当前页和相邻页维护 child window；选中 Empty 时 Long 会被卸载，回到 Long 时 `DemoPagerDataSource` 重新创建 `DemoListViewController(rowCount: 60, ...)`，因此业务数据回到初始值。这不是核心容器重置数据，而是示例业务状态生命周期短于 pager child 生命周期。
+
+调整：
+
+- 新增 `DemoListPageState`，保存 title、初始行数、已加载行数、load-more 配置和 no-more 判断。
+- `DemoPagerDataSource` 持有每个 page 的 `DemoListPageState`，每次创建 child controller 时注入同一个 page state。
+- `DemoListViewController` 改为渲染 page state；load-more completion 只更新 state，然后 reload table。
+- 如果 page state 已经达到 no-more，新建 controller 安装 Refreshable 后立即恢复 `noMoreData()` 状态。
+- 新增 `longListLoadedRowsPersistWhenDataSourceRecreatesController()`，覆盖 data source 重新创建 Long controller 后仍保持 72 行。
+
+Red:
+
+```sh
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerExamplesRowsPersistRedAll -only-testing:ExamplesTests test
+```
+
+Actual: 新增 `longListLoadedRowsPersistWhenDataSourceRecreatesController()` 在旧实现下失败，其他 8 个 `ExamplesTests` 通过。
+
+Verification:
+
+```sh
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerExamplesRowsPersistGreen -only-testing:ExamplesTests test
+```
+
+Actual: `ExamplesTests` 实际执行 9 个测试并通过，新增用例通过。
+
+## 2026-07-07 示例 no-more footer 安全区域系统修复
+
+用户再次反馈 Long 底部 `没有更多数据` 仍未显示在底部安全区域内，而是进入底部 TabBar 的视觉遮挡区。
+
+Root cause：这不是单纯的 Refreshable bug，也不是单纯的 Pager bug，而是示例接入层没有完整处理两者对 `contentInset.bottom` 的叠加关系。Pager 管理 child scroll view 的 bottom inset，用来表达 safe area、底部 TabBar 遮挡和短内容补偿；Refreshable bottom footer 也会基于它捕获的 `originalInset.bottom` 再追加 footer 保留高度。普通 `UITableView + Refreshable` 没有外层容器持续管理 inset 时通常不会触发；但在 CollapsiblePager 中，如果 load-more 开始后 bottom obstruction 才写入，或 no-more 阶段捕获到的是旧 inset，footer 的可滚动空间就不足以把“没有更多数据”推出底部 TabBar 视觉区域。
+
+调整：
+
+- 新增 `DemoLoadMoreFooterMetrics`，集中记录示例使用的 Refreshable footer spacing、默认底部样式高度和 reserved extent。
+- `DemoListViewController.markNoMoreData()` 在调用 `tableView.noMoreData()` 后，确保 `contentInset.bottom >= verticalScrollIndicatorInsets.bottom + DemoLoadMoreFooterMetrics.reservedExtent`。
+- `viewDidLayoutSubviews()` 在 page state 已经 exhausted 时再次校正 no-more footer inset，覆盖横竖屏、安全区或底部遮挡变化后的布局重算。
+- 核心库仍不依赖 Refreshable；核心只负责底部遮挡基线和外部 footer inset 的保留，第三方 footer 高度由业务接入层叠加。
+- `longListLoadedRowsPersistWhenDataSourceRecreatesController()` 改成等待行数达到目标，并在下一次 `beginLoadingMore()` 前等待 Refreshable 收起动画完成，避免测试与 `.ending` 状态竞争。
+- 新增 `noMoreFooterIncludesBottomObstructionWhenInsetChangesDuringLoadMore()`，模拟 load-more 开始后 bottom obstruction 才写入的时序，断言 no-more 后 bottom inset 至少包含底部遮挡和 footer 保留高度。
+
+Red:
+
+```sh
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerNoMoreFooterRedAll -only-testing:ExamplesTests test
+```
+
+Actual: 新增 `noMoreFooterIncludesBottomObstructionWhenInsetChangesDuringLoadMore()` 在旧实现下失败，其他 9 个 `ExamplesTests` 通过。
+
+Verification:
+
+```sh
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerNoMoreFooterGreen2 -enableCodeCoverage NO -only-testing:ExamplesTests test
+```
+
+Actual: `ExamplesTests` 实际执行 10 个测试并通过，新增 no-more footer 回归和 Long 行数持久化回归均通过。
+
+## 2026-07-07 示例 Long 重建后 no-more footer 可见状态恢复
+
+用户反馈 Long 已滚到底部并显示 `没有更多数据` 后，点击 Empty 再点击 Long，回到 Long 时 72 行数据仍在，但 no-more footer 没有立即显示；继续向上滚动后 footer 才重新进入底部安全区域。
+
+Root cause：Pager 只能保存和恢复普通 `contentOffset`，无法从 offset 本身推断业务侧 Refreshable footer 是否应保持可见。Long 切到 Empty 时可能被 child window 卸载，返回 Long 后 data source 会重建 `DemoListViewController`。示例层已经保存了行数和 no-more 状态，但没有保存“离开时 no-more footer 是可见的”这一业务语义；随后 Pager 恢复旧 offset 时会落在行内容底部附近，footer 仍在更下面，需要用户再次滚动才露出。
+
+调整：
+
+- `DemoListPageState` 新增 `shouldRevealNoMoreFooter`，把 no-more footer 可见语义和行数、已加载数量、no-more 状态一起保存在 data source 生命周期内。
+- `DemoListViewController.markNoMoreData()` 进入 no-more 时设置该标记，并继续校正 bottom inset。
+- `viewWillDisappear` 捕获离开前 footer 是否仍处在底部可见位置；如果用户已经离开 footer 区域，后续重建不强制回到底部。
+- 重建后的 controller 只有在页面已可见或 view 已进入 window 时，才允许消耗一次 footer 恢复机会，避免 `viewDidLoad` 阶段用旧 inset 提前把恢复标记置位。
+- `viewDidAppear`、`scrollViewDidScroll` 和布局后的主线程 yield 都会尝试一次恢复，用来覆盖 Pager 后续写回 preserved offset 的时序。
+- 新增 `recreatedLongListKeepsVisibleNoMoreFooterAfterUnload()`，模拟 Long 显示 no-more、卸载重建、Pager 写回行内容底部 offset，再断言重新可见后 offset 恢复到包含 no-more footer 的底部。
+
+Red:
+
+```sh
+xcodebuild -project Examples/Examples.xcodeproj -scheme Examples -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerNoMoreRestoreRedActual -enableCodeCoverage NO -only-testing:ExamplesTests test
+```
+
+Actual: `recreatedLongListKeepsVisibleNoMoreFooterAfterUnload()` 失败，其他 10 个 `ExamplesTests` 通过。
+
+Verification:
+
+```sh
+xcodebuild -quiet -project Examples/Examples.xcodeproj -scheme Examples -destination 'platform=iOS Simulator,id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /tmp/CollapsiblePagerNoMoreRestoreGreen2 -enableCodeCoverage NO -only-testing:ExamplesTests test
+```
+
+Actual: `ExamplesTests` 实际执行 11 个测试并通过，新增 no-more footer 可见状态恢复回归通过。
+
+## 2026-07-07 Tab 点击切到未访问页突然吸顶修复
+
+用户反馈 `CollapsiblePagerTabBarView` 点击后页面突然吸顶。截图中 Long 页已在较深滚动位置，点击切页后 Header/TabBar 被直接保持在 pinned 状态。
+
+Root cause：容器原策略把 `pinAnchor` 当成全局纵向状态。相邻 child 预加载后会跟随当前页的 pin delta 同步 offset；非相邻或新建 child 也会用当前 `pinAnchorY` 初始化。切页完成后 `alignCurrentChildOffsetToPinAnchor()` 又会把目标页补齐到当前吸顶阈值。因此从 Long 这类已折叠页面点击 Short/Empty 时，目标页即使没有自己的滚动历史，也会被写成吸顶 offset。
+
+调整：
+
+- `CollapsiblePagerVerticalScrollCoordinator.replaceRecords` 增加可选 `syncEligibleIndexes`，默认保持旧单元测试行为；容器实际传入空集合，让非当前页保留自己的纵向位置。
+- `CollapsiblePagerViewController` 记录 `visitedPageIndexes`。未访问 child 创建时从展开态 top boundary 初始化；只有访问过的 child 卸载时保存 contentOffset snapshot。
+- 当轮过渡策略是 Tab 点击完成时使用目标 child 当前 offset 反推 `pinAnchor`，让 Short/Empty 首次进入保持展开态；该策略后续被“Tab 点击已访问页 Header 跳动修复”替换为保持当前共享 `pinAnchor`。
+- 更新 `tabBarSelectionToUnvisitedEmptyPageRevealsHeader()` 和 `tabBarSelectionBackToScrolledLongPagePreservesChildOffset()`，覆盖点击 Empty/Short 不继承 Long 吸顶 offset，同时回到 Long 仍恢复原滚动位置。
+
+Red:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /private/tmp/CollapsiblePagerDerivedData test
+```
+
+Actual: 旧实现下 `tabBarSelectionToUnvisitedEmptyPageRevealsHeader()` 和 `tabBarSelectionBackToScrolledLongPagePreservesChildOffset()` 失败，目标页 offset 仍是吸顶边界 `-48`。
+
+Verification:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'id=49428834-37D6-4470-BF7F-951C0F3441D4' -derivedDataPath /private/tmp/CollapsiblePagerDerivedData test
+```
+
+Actual: 核心包 Swift Testing 实际执行 113 个测试并通过。
+
+## 2026-07-07 快速点击 Tab 点回当前页无响应修复
+
+用户反馈快速点击 `CollapsiblePagerTabBarView` 时有时没有响应，例如 Long 已是当前页或动画过程中快速点回 Long。现有日志已经能打印 `tabTap` 和 `pageRequest rejected/accepted`，但缺少“pending 被取消”的明确语义。
+
+Root cause：`PageRequestPipeline.request(_:)` 把 `targetIndex == effectiveSelectedIndex` 统一当作 no-op。正常静止状态下这是正确的；但如果已经存在 `pendingSelectedIndex`，用户点回当前页表示要取消上一笔 pending 切换。旧逻辑会直接拒绝该点击，横向 `UIScrollView` 的旧动画继续完成，随后提交到旧 target，视觉上表现为 Long 点击没有响应。
+
+调整：
+
+- `PageRequestPipeline` 在 `targetIndex == effectiveSelectedIndex` 且存在 pending target 时调用 `cancel(sourceIndex:)`，清空 pending selection、pending source，并把 `PagePosition` 回滚到当前页。
+- `CollapsiblePagerViewController` 识别该路径并打印 `pageRequest cancelledPending`，随后停止横向滚动、结束旧 child appearance transition，不触发 `didSelectPageAt`。
+- 新增 `requestBackToCurrentSelectionCancelsPendingTarget()`，覆盖管线层取消语义。
+- 新增 `tabTapBackToCurrentSelectionCancelsPendingPageTransition()`，覆盖旧动画完成回调不能再提交旧 target。
+
+Red:
+
+```sh
+xcodebuild -quiet -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17' test
+```
+
+Actual: 新增 `requestBackToCurrentSelectionCancelsPendingTarget()` 失败，证明旧逻辑会把点回当前页的请求拒绝。
+
+Verification:
+
+```sh
+xcodebuild -quiet -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17' test
+```
+
+Actual: 核心包测试通过。
+
+## 2026-07-07 快速重复点击 Tab 卡 pending 修复
+
+用户继续反馈快速点击 `CollapsiblePagerTabBarView` 时点击没有反应。新日志里已经出现 `tabTap index=1`，说明事件到达 TabBar；后续 `pageRequest accepted` 后，状态长期停留在 `selected=2 effective=2 pending=1 pendingSource=tabTap`。
+
+Root cause：`PageContainer` 在 `scrollToPage(animated:)` 启动期间可能同步触发 `transitionCompleted`。容器原本用 `isStartingAnimatedPageScroll` 防重入时直接忽略该 completion，导致 target 页已经稳定到 `PagePosition(raw=1, from=1, to=1, progress=0)`，但 `pendingSelectedIndex` 仍未提交。用户继续点击同一个 pending target 时，又会重新启动一笔动画；如果没有新的 completion 到来，视觉上就表现为 Tab 点击没有响应。
+
+调整：
+
+- `CollapsiblePagerViewController` 不再丢弃启动期 completion，而是记录 `deferredAnimatedPageCompletionIndex`。
+- `handlePagePositionChanged(_:)` 在 PagePosition 稳定到 deferred target 后消费 completion，并走统一 `completePageTransition(targetIndex:)`。
+- 如果用户再次点击已经稳定可见的 pending target，容器直接提交该 pending selection，清空 pending source。
+- 新请求取消或换目标时清理旧 deferred completion，避免旧 completion 污染下一笔请求。
+- 新增 `repeatedTabTapToSettledPendingTargetCommitsSelectionAfterMissedAnimationCompletion()`，覆盖 `2 -> 1` 动画 completion 在启动期丢失后，再次点击 Short 应提交 selectedIndex 的场景。
+
+Red:
+
+```sh
+xcodebuild -quiet -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17' test
+```
+
+Actual: 新增 `repeatedTabTapToSettledPendingTargetCommitsSelectionAfterMissedAnimationCompletion()` 失败，`selectedIndex/effectiveSelectedIndex` 仍停在 `2`。
+
+Verification:
+
+```sh
+xcodebuild -quiet -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17' test
+xcodebuild -quiet -project Examples/Examples.xcodeproj -scheme Examples -destination 'generic/platform=iOS Simulator' build
+```
+
+Actual: 核心包测试退出码为 0，Examples 构建退出码为 0。
+
+## 2026-07-07 Tab 点击未访问页 Header 跳动修复
+
+用户反馈点击 `CollapsiblePagerTabBarView` 时有跳动，感觉 Header 位置变了。最新日志里同一组操作的 `tabTap itemFrame.y` 从 `320` 回到 `376`；对应 PullDown 日志显示点击前 `collapse=0.22 childOffsetY=-252 boundaryY=-308`，说明 Header 处于半折叠状态，切到未访问页后被重置到展开态。
+
+Root cause：上一轮为避免未访问 Short/Empty 继承 Long 的深滚动状态，引入了“未访问 child 从展开态 top boundary 初始化 + Tab 点击完成后从目标 child offset 反推 pinAnchor”的策略。该策略在源页已经半折叠或吸顶时会把目标 child 的 `contentOffset.y = -managedTopInset` 反推成 `pinAnchor = 0`，导致 Header/TabBar 在切页提交时从当前位置跳回展开位置。
+
+调整：
+
+- Tab 点击到未访问目标页时，在请求发起后、PageContainer 滚动前，把目标 child offset 设为 `currentPinAnchor - managedTopInset`。
+- 当轮仍保留“已访问目标页采用目标 child 自己 offset 反推 `pinAnchor`”的策略；该策略后续证明会导致已访问页跳动，并在下一节改为保持当前共享 `pinAnchor`。
+- 公开 API 和横向手势仍沿用当前 pin 对齐策略，不改业务选择接口。
+- `tabBarSelectionToUnvisitedEmptyPagePreservesPinnedHeaderPosition()` 覆盖从吸顶 Long 切到未访问 Empty 时 Header 保持吸顶。
+- 新增 `tabBarSelectionToUnvisitedPagePreservesPartiallyCollapsedHeaderPosition()`，覆盖半折叠状态下点击未访问 Empty 不改变 collapse progress、TabBar frame 和目标 child offset。
+- `tabBarSelectionBackToScrolledLongPagePreservesChildOffset()` 的中间 Short 预期改为继承当前吸顶 offset，核心断言仍是回 Long 保留深滚动。
+
+Red:
+
+```sh
+xcodebuild -quiet -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17' test
+```
+
+Actual: 新增 `tabBarSelectionToUnvisitedPagePreservesPartiallyCollapsedHeaderPosition()` 失败，证明当前实现会把半折叠 Header 重置到展开态。
+
+Verification:
+
+```sh
+xcodebuild -quiet -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17' test
+```
+
+Actual: 核心包测试退出码为 0。
+
+## 2026-07-07 Tab 点击已访问页 Header 跳动修复
+
+用户继续反馈点击 `CollapsiblePagerTabBarView` 后仍有跳动。新日志中先出现 `tabTap index=0 itemFrame.y=376`，说明当前 Long 页处于展开态；随后点击 Empty 后 PullDown 变为 `collapse=0.63 childOffsetY=-144.33`，说明目标页之前保存的半折叠 offset 在提交时反向修改了共享 Header 位置。
+
+Root cause：上一轮只处理了未访问页。Tab 点击到已访问且仍在 child window 内的目标页时，`completePageTransition` 仍调用 `adoptPinAnchorFromCurrentChildOffset()`，直接从目标 child 的旧 `contentOffset` 反推 `pinAnchor`。因此源页展开、目标页半折叠时，Header/TabBar 会在 selection commit 时跳到目标页旧折叠位置。
+
+调整：
+
+- Tab 点击完成后不再从目标 child offset 反推 `pinAnchor`，而是保持当前共享 `pinAnchor`。
+- 目标 child 在 commit 阶段按 `pinAnchorY - managedTopInset` 校准 offset，保证 Header/TabBar 视觉位置不因 Tab 点击改变。
+- 只有当前已经完全吸顶且目标 child 也超过吸顶阈值时，保留目标 child 更深的列表 offset；这样回到 Long 底部仍能保持行位置和 no-more footer 状态。
+- 新增 `tabBarSelectionToVisitedPartiallyCollapsedPagePreservesCurrentHeaderPosition()`，覆盖已访问 Short 保留半折叠 offset、Long 展开后再点回 Short 时 Header 不跳动。
+
+Red:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:CollapsiblePagerTests test
+```
+
+Actual: 新增用例失败，`collapseProgress` 差值为 `0.2153846153846154`，`tabBarFrame.minY` 差值为 `56pt`，目标 Short offset 仍为 `-252` 而不是当前展开态的 `-308`。
+
+Verification:
+
+```sh
+xcodebuild -quiet -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:CollapsiblePagerTests test
+```
+
+Actual: 核心包测试退出码为 0。
+
+## 2026-07-07 横向手势提交后 Header/内容错位修复
+
+用户继续反馈 UI 显示异常：`Short row 1` 已经出现在 `CollapsiblePagerTabBarView` 上方，TabBar 覆盖了 `Short row 2`，视觉上像 child 内容和 Header/TabBar 使用了不同纵向状态。最新日志关键形态：
+
+- Long 部分折叠时开始横向手势，`collapse=0.30 childOffsetY=-231`。
+- 手势提交到 Short 后，触摸 owner 已是 `childScroll[1]`，但第一帧 `containerPan shouldBegin` 仍看到 `collapse=0.30 childOffsetY=-141`。
+- 随后 child scroll 回调又变成 `collapse=0.64 childOffsetY=-141`，说明目标 child offset 对应的 pin 与容器提交时的共享 pin 不一致。
+- 日志前半段还显示快速重复点击同一个 pending Tab 时，`pageRequest accepted` 会把 `PagePosition` 从 `0.67/0.92/0.94` 反复重置到 `0.00`，随后又被真实 scroll offset 拉回。
+
+Root cause：Tab 点击和横向手势的纵向锚点语义被混用。Tab 点击需要保持用户点击前的共享 Header 位置，避免目标页旧 offset 引发跳动；但正常横向手势提交时，目标页已经成为实际可见和 hit-test owner，如果仍只按旧 `pinAnchor` 补齐目标页，而不把目标页当前 offset 采纳为新的 `pinAnchor`，就会出现内容已经滚到 TabBar 上方而 Header/TabBar 还停在旧折叠位置。另一方面，手势过冲停靠到中间页时，完成页并不是 pending target，中间页 offset 可能是刚恢复的旧值，不能直接采纳。
+
+调整：
+
+- `PageRequestPipeline` 拒绝同一 pending target 的重复请求，保持当前 `PagePosition` 不被重置；容器层记录 `pageRequest ignoredDuplicatePending` 日志。
+- `completePageTransition` 在 `pendingSource == .gesture` 且完成页等于 pending target 时，从目标 child 当前 offset 采纳 `pinAnchor`，让 Header/TabBar 与目标内容使用同一纵向状态。
+- `pendingSource == .gesture` 但完成页不是 pending target 的过冲中间页，继续按当前 `pinAnchor` 对齐目标 child，保留既有 `gestureOvershootCompletionCommitsVisibleSettledPage()` 行为。
+- Tab 点击路径继续保持当前共享 `pinAnchor`，避免点击切页造成 Header 跳动。
+- 新增 `repeatedRequestToSamePendingTargetKeepsCurrentPagePosition()` 覆盖重复 pending 请求不重置进度。
+- 新增 `gestureSelectionAdoptsTargetChildOffsetAsPinAnchor()` 覆盖 Long 半折叠、Short offset 更深、横向手势提交到 Short 后 collapse 采纳目标 offset 的场景。
+
+Red:
+
+```sh
+xcodebuild -quiet -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
+```
+
+Actual: 新增两个测试失败，分别复现重复 pending 请求重置进度和手势提交后仍停在旧 `pinAnchor` 的问题。
+
+Verification:
+
+```sh
+xcodebuild -quiet -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
+```
+
+Actual: 核心包测试退出码为 0。
+
+## 2026-07-07 Tab 切回 Long 后 no-more footer 程序化 offset 跳动修复
+
+用户反馈 Long 滚到底部显示 no-more 后，切到 Empty 再切回 Long，后续日志仍出现跳动。关键日志在同一个 `tabTap index=0` 提交窗口内先出现 `childOffsetY=-308 collapse=0 pinY=0`，紧接着在没有用户滚动提交前变成 `childOffsetY=2951 collapse=1`。
+
+Root cause：这不是 Refreshable 自身自动刷新，也不是 Pager 保存的 `preservedContentOffset` 二次回放。切页完成时，Pager 为了保持当前 Header 展开态，会把目标 Long 对齐到 `pinAnchorY - managedTopInset == -308`。但 Long 的业务 footer / no-more 状态可能在 child 重新入层或 layout 后立即程序化设置更深的 `contentOffset`，用于恢复 footer 可见位置。旧实现把这次非用户触发的深 offset 当成当前 child 的真实滚动，立刻更新共享 `PinAnchor`，于是 Header/TabBar 从展开态跳到吸顶态。
+
+调整：
+
+- 新增 `TabSelectionOffsetLock`。Tab 点击完成后，如果目标 child 被校准到当前共享 Header 位置，则记录本次 Tab 选择建立的目标 offset 和 `pinAnchor`。
+- `handleChildScrollViewDidScroll` 在交给纵向协调器前先检查该锁；如果当前 child 在未 tracking/dragging/decelerating 时被程序化推到更深 offset，则用 guarded update 复位到锁定 offset，并保持原 `pinAnchor`。
+- 用户真实拖动、向更展开方向的程序化 offset、`reloadData`、新的 page request、手势/API 完成路径都会解除该锁，避免影响正常滚动和已有测试里显式展开 Header 的场景。
+- 同步更新 `preservedContentOffsetYByIndex`，防止刚校准后的 offset 被旧保存值再次用于后续恢复。
+- 新增 `tabBarSelectionBackFromExpandedEmptyDoesNotReplayStaleLongOffset()`，覆盖 Long 深滚动后切到 Empty，Empty 展开 Header，再切回 Long 时第三方 footer 程序化设置深 offset 也不能让 Header/TabBar 跳回吸顶状态。
+
+Red:
+
+```sh
+xcodebuild -quiet -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
+```
+
+Actual: 新增用例失败，证明非用户程序化深 offset 会把刚恢复的展开态改写为吸顶态。
+
+Verification:
+
+```sh
+xcodebuild -quiet -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
+```
+
+Actual: 核心包测试退出码为 0。
+
+## 2026-07-07 Header/TabBar 向上拖无法移动修复
+
+用户继续反馈 Header 展开、child 位于顶部时，从 Header/TabBar 区域向上拖“不能往上移动”。最新日志关键形态：
+
+- `childOffsetY=-308 boundaryY=-308 collapse=0`，当前 child 已在 managed top boundary。
+- `activeHandoff=Optional(.containerHost(index: 0))`，host/proxy 已回到 neutral baseline 附近。
+- 后续触点落在 `fixedHeader` 或 `tabBar`，`containerPan shouldBegin=false`，而 Header gate 因 `.allowsChildRefresh` 也不会 begin；触摸没有进入 child scroll view，所以向上 delta 被丢掉。
+
+Root cause：`.container` host 只有 refresh reveal 方向和 baseline clamp 语义。Header/TabBar 区域不是 child scroll view 的可滚动命中区域，当 active container handoff 残留或 host 位于 neutral baseline 时，从这些区域开始的向上拖没有 owner 可以把 delta 转交给 current child。旧逻辑还会在 active overscroll owner continuation 下继续让 host 接管向上手势，并在 `scrollViewDidScroll` 中把 host 夹回 baseline，表现为无法折叠 Header 或推动列表。
+
+调整：
+
+- `shouldBeginContainerRefreshHostPan` 增加 Header/TabBar upward proxy 判定：Header 完全展开、current child 位于 managed top boundary、手势从 Header/TabBar 区域明确向上时，允许 host pan begin。
+- 新增 `isRoutingContainerHostUpwardPanToChild` 会话标记。只有该标记存在时，host 被拖到 neutral baseline 以上才会把 delta 转交给 current child；普通程序性 baseline clamp 仍保持原语义，不清掉 active handoff。
+- `routeContainerHostUpwardScrollToChildIfNeeded` 将 host baseline 以上的 delta 写入 current child `contentOffset`，采纳新的 `PinAnchor`，再把 host 夹回 neutral baseline 并清理 refresh handoff/proxy 状态。
+- reload、proxy cancel/finish、container finish、外部刷新 inset 接管等 reset 路径同步清理 upward proxy 标记。
+- 新增 `upwardHeaderPanAtExpandedTopRoutesHostDeltaToCurrentChild()`，覆盖 Header 区域向上拖必须推动 current child、host 保持 neutral baseline、`collapseProgress` 增大的场景。
+
+Red:
+
+```sh
+xcodebuild -quiet -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17' test
+```
+
+Actual: 新增用例失败；初始实现还误把普通 active host baseline clamp 当成 upward proxy，导致 `activeContainerRefreshHostClampsAboveNeutralBaseline()` 失败。
+
+Verification:
+
+```sh
+xcodebuild -quiet -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17' test
+```
+
+Actual: 核心包测试退出码为 0。
+
+## 2026-07-08 Header/TabBar upward proxy 回弹修复
+
+用户反馈上一轮后“实际可以向上移动”，但移动上去后感觉会回弹回来。新日志关键形态：
+
+- `hostRouteUpward` 已出现，说明 Header/TabBar upward proxy 能把第一段 host delta 转给 child。
+- 随后同一个 host pan 继续产生 `hostDidScroll offsetY < baseline`，但 active handoff 已清空，`beginContainerRefreshHandoffFromHostIfNeeded` 因 `collapse > 0` 返回 nil，host offset 仍短暂停在 refresh reveal 区间。
+- 视觉上表现为 Header/list 已经向上移动，随后外层 host 又进入下拉方向，造成上移后被拉回的回弹感。
+
+Root cause：上一轮把 upward proxy 当成一次性 delta 转交。`routeContainerHostUpwardScrollToChildIfNeeded` 在第一次转交后立即清空 `isRoutingContainerHostUpwardPanToChild`，并且仍在 `onRefreshPanWillBegin` 中创建 `.containerHost` active handoff。这样同一个 host pan 的后续 offset 既不能继续转交给 child，也可能在 baseline 以下走到 refresh reveal 路径。
+
+调整：
+
+- upward proxy 的 `onRefreshPanWillBegin` 不再创建 `.containerHost` active handoff，只清理已有 handoff/proxy 状态。
+- `isRoutingContainerHostUpwardPanToChild` 保持到 host scroll interaction 结束。upward proxy 生命周期内，host baseline 以上的 delta 持续追加到 current child；baseline 以下的 host 抖动只夹回 neutral baseline，不进入 container refresh reveal。
+- 取消 upward proxy 转交时对 `collapseProgress == 0` 和 child 仍在 managed top boundary 的限制；这些条件只用于建立 upward proxy，不用于同一 pan 后续路由。
+- 新增 `upwardHeaderPanKeepsHostAtBaselineForRemainingGesture()`，覆盖 first route 后 host 再向 baseline 以下移动时必须被夹回 baseline，且 active handoff 仍为 nil。
+- 新增 `upwardHeaderPanContinuesRoutingAfterHeaderStartsCollapsing()`，覆盖 Header 已经开始折叠后，同一 upward proxy 的后续 host 上行 delta 继续推动 child。
+
+Red:
+
+```sh
+xcodebuild -quiet -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17' test
+```
+
+Actual: 先后看到新增用例失败，分别证明 host baseline 以下位移未被夹回、Header 开始折叠后后续 delta 未继续转交。
+
+Verification:
+
+```sh
+xcodebuild -quiet -scheme CollapsiblePager -destination 'platform=iOS Simulator,name=iPhone 17' test
+```
+
+Actual: 核心包测试退出码为 0。
+
+## 2026-07-08 状态栏点击顶滚 owner 修复
+
+用户反馈点击时间状态栏后滚动异常，并明确期望：没有吸顶时滚动容器 `UIScrollView`，吸顶时滚动可见子控制器的 `UIScrollView`。
+
+Root cause：框架没有统一管理 `scrollsToTop`。`containerRefreshHostScrollView` 被固定为 `false`，而 page container 的横向 paging scroll view 和多个已加载 child scroll view 都保留 UIKit 默认 `true`。状态栏点击需要 window 内唯一 `scrollsToTop` 响应者；多个候选会导致系统选错、无响应或滚动到非当前页。另一方面，Header 未吸顶时外层 host 才应代表容器接收状态栏顶滚请求；如果只让 child 响应，会绕过“未吸顶先回容器顶部”的语义。
+
+调整：
+
+- PageContainer 的内部横向 `UIScrollView` 永远 `scrollsToTop = false`，不参与状态栏顶滚。
+- 新增 `updateScrollsToTopOwnership()`，在 layout/selection/child window 同步时按当前 `collapseProgress` 切换唯一 owner。
+- `collapseProgress < 1` 时，只有 `containerRefreshHostScrollView.scrollsToTop = true`，所有 loaded child 关闭。
+- `collapseProgress == 1` 时，只有当前有效 child 的 `pagerScrollView.scrollsToTop = true`，host 与非当前 child 关闭。
+- 没有有效页面时，host、PageContainer 和 child 全部关闭。
+- host 的 `scrollViewShouldScrollToTop` 回调在 Header 半折叠时把 current child 动画滚回 expanded managed top boundary，因为 V1 的 `PinAnchor` 仍由 current child `contentOffset` 表达。
+- 新增 `statusBarScrollsToTopUsesContainerWhenHeaderIsNotPinned()` 和 `statusBarScrollsToTopUsesVisibleChildOnlyWhenHeaderIsPinned()`。
+
+Red:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'id=49428834-37D6-4470-BF7F-951C0F3441D4' test
+```
+
+Actual: 新增测试按预期失败。`statusBarScrollsToTopUsesContainerWhenHeaderIsNotPinned()` 中 host 仍为 `scrollsToTop == false`；`statusBarScrollsToTopUsesVisibleChildOnlyWhenHeaderIsPinned()` 中非当前 child 仍为 `scrollsToTop == true`。
+
+Verification:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'id=49428834-37D6-4470-BF7F-951C0F3441D4' test
+```
+
+Actual: `TEST SUCCEEDED`，Swift Testing 报告 126 个核心包测试通过。
+
+## 2026-07-08 状态栏点击 host 激活修复
+
+用户继续反馈未吸顶时 `containerRefreshHostScrollView` 没有响应。上一轮已经把 `scrollsToTop` 唯一 owner 切给 host，但半折叠状态下 host 自己仍停在 neutral baseline，UIKit 会把它判断为已经在顶部，从而不触发 `scrollViewShouldScrollToTop`。
+
+Root cause：V1 的未吸顶全局位置由 current child 的 `contentOffset` 表达，`containerRefreshHostScrollView` 只作为外层刷新 host 保持视觉 neutral。仅设置 `host.scrollsToTop = true` 不足以触发状态栏顶滚；当 `host.contentOffset.y == -host.adjustedContentInset.top` 时，系统可能直接认为没有可滚动距离，不询问 delegate，表现为 host 没有响应。
+
+调整：
+
+- `containerRefreshHostScrollView` 新增状态栏顶滚激活 inset。仅在 `0 < collapseProgress < 1` 且 host 是唯一 owner 时打开，视觉仍保持 neutral baseline。
+- 该 inset 计入 host 的 effective neutral refresh inset，`usesNeutralRefreshContentInset()` 也按 effective top 判断，避免把状态栏激活态误判成业务刷新 inset。
+- host 收到 `scrollViewShouldScrollToTop` 后始终返回 `false`，不让 host 自己执行 1pt 顶滚，只把 current child 动画滚回 expanded managed top boundary。
+- 完全展开、吸顶、无有效页面或 host 不是 owner 时关闭激活 inset。
+- 新增 `partiallyCollapsedStatusBarTapCanReachContainerHost()`，覆盖半折叠时 host 必须处于 UIKit 可触发顶滚 delegate 的状态。
+
+Red:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'id=49428834-37D6-4470-BF7F-951C0F3441D4' test
+```
+
+Actual: 新增测试按预期失败，半折叠时 `host.contentOffset.y > -host.adjustedContentInset.top` 不成立，说明 UIKit 会把 host 视为已到顶部。
+
+Verification:
+
+```sh
+xcodebuild -scheme CollapsiblePager -destination 'id=49428834-37D6-4470-BF7F-951C0F3441D4' test
+```
+
+Actual: `TEST SUCCEEDED`，Swift Testing 报告 127 个核心包测试通过。
+
 ## 执行策略
 
 推荐使用 Subagent-Driven：

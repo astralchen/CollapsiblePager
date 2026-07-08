@@ -24,6 +24,16 @@ import Testing
     #expect(output.tabBarFrame.minY == 351)
 }
 
+@Test func layoutUsesBottomObstructionWhenItExceedsSafeArea() {
+    var input = CollapsiblePagerLayoutInput.defaultTestValue
+    input.safeAreaInsets.bottom = 34
+    input.bottomObstructionInset = 88
+
+    let output = CollapsiblePagerLayoutEngine().layout(input)
+
+    #expect(output.childContentInset.bottom == 88)
+}
+
 @Test func pinnedLayoutKeepsTabBarAtPinY() {
     var input = CollapsiblePagerLayoutInput.defaultTestValue
     input.pinAnchorY = 260

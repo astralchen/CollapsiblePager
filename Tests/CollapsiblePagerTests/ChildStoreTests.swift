@@ -81,6 +81,81 @@ import UIKit
 }
 
 @MainActor
+@Test func childStorePreservesExternalBottomInsetAddedAfterPagerManagement() throws {
+    let pager = CollapsiblePagerViewController()
+    let store = CollapsiblePagerChildStore(owner: pager)
+    let child = ScrollChild()
+    child.scrollView.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+    child.scrollView.contentSize = CGSize(width: 390, height: 2_000)
+
+    let record = try #require(
+        store.makeRecord(
+            for: child,
+            index: 0,
+            managedTopInset: 308,
+            managedBottomInset: 34,
+            pinThreshold: 260
+        )
+    )
+    let externalFooterInset: CGFloat = 44
+    child.scrollView.contentInset.bottom += externalFooterInset
+
+    store.updateManagedInset(
+        for: record,
+        managedTopInset: 308,
+        managedBottomInset: 50,
+        pinThreshold: 260
+    )
+
+    #expect(child.scrollView.contentInset.bottom == 94)
+    #expect(child.scrollView.verticalScrollIndicatorInsets.bottom == 50)
+}
+
+@MainActor
+@Test func childStoreDoesNotAmplifyExternalBottomInsetWhenContentInsetUpdateReenters() throws {
+    let pager = CollapsiblePagerViewController()
+    let store = CollapsiblePagerChildStore(owner: pager)
+    let child = ReentrantInsetScrollChild()
+    child.scrollView.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+    child.scrollView.contentSize = CGSize(width: 390, height: 2_000)
+
+    let record = try #require(
+        store.makeRecord(
+            for: child,
+            index: 0,
+            managedTopInset: 308,
+            managedBottomInset: 34,
+            pinThreshold: 260
+        )
+    )
+    child.scrollView.contentInset.bottom += 44
+
+    var didReenter = false
+    child.scrollView.onContentInsetSet = {
+        guard !didReenter else {
+            return
+        }
+        didReenter = true
+        store.updateManagedInset(
+            for: record,
+            managedTopInset: 308,
+            managedBottomInset: 50,
+            pinThreshold: 260
+        )
+    }
+
+    store.updateManagedInset(
+        for: record,
+        managedTopInset: 308,
+        managedBottomInset: 50,
+        pinThreshold: 260
+    )
+
+    #expect(child.scrollView.contentInset.bottom == 94)
+    #expect(record.lastManagedContentInset.bottom == 50)
+}
+
+@MainActor
 @Test func childStoreUsesStandardContainmentWhenAttachingAndDetaching() throws {
     let pager = CollapsiblePagerViewController()
     pager.loadViewIfNeeded()
@@ -119,6 +194,26 @@ private final class InsetTrackingScrollView: UIScrollView {
         set {
             contentInsetWriteCount += 1
             super.contentInset = newValue
+        }
+    }
+}
+
+@MainActor
+private final class ReentrantInsetScrollChild: UIViewController, CollapsiblePagerScrollProviding {
+    let scrollView = ReentrantInsetScrollView()
+    var pagerScrollView: UIScrollView { scrollView }
+}
+
+private final class ReentrantInsetScrollView: UIScrollView {
+    var onContentInsetSet: (() -> Void)?
+
+    override var contentInset: UIEdgeInsets {
+        get {
+            super.contentInset
+        }
+        set {
+            super.contentInset = newValue
+            onContentInsetSet?()
         }
     }
 }

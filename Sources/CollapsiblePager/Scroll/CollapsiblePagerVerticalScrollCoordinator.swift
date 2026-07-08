@@ -51,6 +51,7 @@ final class CollapsiblePagerVerticalScrollCoordinator {
     private var model: VerticalScrollModel
     private var records: [CollapsiblePagerChildRecord] = []
     private var currentIndex: Int?
+    private var syncEligibleIndexes: Set<Int>?
     private var guardedOffsetUpdateDepth = 0
 
     init(pinAnchorY: CGFloat, pinThreshold: CGFloat, managedTopInset: CGFloat) {
@@ -73,9 +74,14 @@ final class CollapsiblePagerVerticalScrollCoordinator {
         model.setPinAnchorY(pinAnchorY)
     }
 
-    func replaceRecords(_ records: [CollapsiblePagerChildRecord], currentIndex: Int?) {
+    func replaceRecords(
+        _ records: [CollapsiblePagerChildRecord],
+        currentIndex: Int?,
+        syncEligibleIndexes: Set<Int>? = nil
+    ) {
         self.records = records
         self.currentIndex = currentIndex
+        self.syncEligibleIndexes = syncEligibleIndexes
     }
 
     func updateCurrentIndex(_ currentIndex: Int?) {
@@ -126,6 +132,10 @@ final class CollapsiblePagerVerticalScrollCoordinator {
 
     private func syncNonCurrentChildren(by pinDeltaY: CGFloat, excluding currentIndex: Int) {
         for record in records where record.index != currentIndex {
+            if let syncEligibleIndexes, !syncEligibleIndexes.contains(record.index) {
+                continue
+            }
+
             let minimumOffsetY = -model.managedTopInset
             let targetOffsetY = max(record.scrollView.contentOffset.y + pinDeltaY, minimumOffsetY)
             setContentOffsetY(targetOffsetY, for: record.scrollView)
